@@ -1,0 +1,32 @@
+FROM docker.io/eclipse-temurin:26-jdk
+
+# Fix for rootless podman apt issues
+RUN mkdir -p /var/lib/apt/lists/partial && chmod 1777 /var/lib/apt/lists/partial
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    git \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV ANDROID_SDK_ROOT /opt/android-sdk
+RUN mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools && \
+    wget https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/tools.zip && \
+    unzip /tmp/tools.zip -d ${ANDROID_SDK_ROOT}/cmdline-tools && \
+    mv ${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest && \
+    rm /tmp/tools.zip
+
+ENV PATH ${PATH}:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools
+
+RUN yes | sdkmanager --licenses
+RUN sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+WORKDIR /app
+# Copy only the Android project
+COPY integrating-lynx/android/KotlinEmptyProject .
+
+# The bundle should already be in app/src/main/assets/main.lynx.bundle
+# because we copied it in a previous turn on the host.
+
+RUN ./gradlew assembleDebug
