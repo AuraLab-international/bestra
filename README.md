@@ -8,7 +8,7 @@ Bestra is a secure mobile chat application built with **ReactLynx**, **WebTransp
 - `backend/`: Node.js server with Prisma and WebTransport.
 - `integrating-lynx-demo-projects/android/KotlinEmptyProject/`: Android shell for APK generation.
 
-## Build Instructions (NixOS)
+## Build Instructions
 
 ### 1. Build the Frontend
 Navigate to the frontend directory and build the ReactLynx bundle. You must provide the backend URL so the APK knows where to connect:
@@ -29,6 +29,11 @@ cp dist/main.lynx.bundle ../integrating-lynx/android/KotlinEmptyProject/app/src/
 
 ```bash
 podman build -t bestra-android -f Dockerfile.android .
+```
+or
+
+```bash
+docker build -t bestra-android -f Dockerfile.android .
 ```
 The resulting APK will be located at:
 `integrating-lynx/android/KotlinEmptyProject/app/build/outputs/apk/debug/app-debug.apk`
