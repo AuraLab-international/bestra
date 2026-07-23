@@ -1,10 +1,6 @@
 pipeline {
     agent any
     
-    tools {
-        nodejs 'node-20'
-    }
-    
     environment {
         // Azure Configuration
         AZURE_RESOURCE_GROUP = 'bestra-rg'
@@ -228,30 +224,9 @@ pipeline {
             echo "🎯 Backend URL: https://${env.AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
             echo "🎯 Frontend URL: https://${env.AZURE_APP_SERVICE_FRONTEND}.azurewebsites.net"
             echo "📊 Rapport ZAP: zap-report.html"
-            
-            emailext (
-                subject: "✅ SUCCESS: bestra-pipeline #${env.BUILD_NUMBER}",
-                body: """
-                    Pipeline DevSecOps terminé avec succès !
-                    
-                    Backend: https://${env.AZURE_APP_SERVICE_BACKEND}.azurewebsites.net
-                    Frontend: https://${env.AZURE_APP_SERVICE_FRONTEND}.azurewebsites.net
-                    
-                    Build: #${env.BUILD_NUMBER}
-                    Durée: ${currentBuild.durationString}
-                    
-                    Tous les tests de sécurité sont passés avec succès.
-                """,
-                to: 'votre-email@example.com'
-            )
         }
         failure {
             echo '❌ ❌ ❌ PIPELINE DEVSECOPS ÉCHOUÉ ! ❌ ❌ ❌'
-            emailext (
-                subject: "❌ FAILED: bestra-pipeline #${env.BUILD_NUMBER}",
-                body: "Le pipeline a échoué. Vérifiez les logs dans Jenkins.",
-                to: 'votre-email@example.com'
-            )
         }
         always {
             echo '📊 Pipeline terminé'
