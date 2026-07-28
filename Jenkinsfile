@@ -2,7 +2,6 @@ pipeline {
     agent any
     
     environment {
-        // Azure Configuration
         AZURE_RESOURCE_GROUP = 'bestra-rg'
         AZURE_APP_SERVICE_BACKEND = 'bestra-backend'
         AZURE_APP_SERVICE_FRONTEND = 'bestra-frontend'
@@ -18,7 +17,7 @@ pipeline {
         stage('Start') {
             steps {
                 echo '🚀 Démarrage du pipeline DevSecOps'
-                echo "Build #${BUILD_NUMBER} - ${BUILD_ID}"
+                echo "Build #${BUILD_NUMBER}"
             }
         }
         
@@ -43,7 +42,7 @@ pipeline {
         stage('GitLeaks Secret Scan') {
             steps {
                 sh '''
-                    docker run --rm -v $(pwd):/path zricethezav/gitleaks detect --source=/path --verbose || echo "✅ Aucun secret trouvé"
+                    docker run --rm -v $(pwd):/path zricethezav/gitleaks detect --source=/path --verbose || echo "✅ Aucun secret"
                 '''
             }
         }
@@ -52,12 +51,7 @@ pipeline {
             steps {
                 sh '''
                     cd backend
-                    npx sonar-scanner \
-                        -Dsonar.projectKey=bestra-backend \
-                        -Dsonar.sources=. \
-                        -Dsonar.host.url=http://localhost:9000 \
-                        -Dsonar.login=admin \
-                        -Dsonar.password=admin || echo "⚠️ SonarQube ignoré"
+                    npx sonar-scanner -Dsonar.projectKey=bestra-backend -Dsonar.sources=. -Dsonar.host.url=http://localhost:9000 -Dsonar.login=admin -Dsonar.password=admin || echo "⚠️ SonarQube ignoré"
                 '''
             }
         }
@@ -129,8 +123,6 @@ pipeline {
         stage('Push Frontend to DockerHub') {
             steps {
                 sh '''
-                    # Frontend web (pas Android)
-                    docker build -f bestra/Dockerfile -t bestra-frontend:${BUILD_NUMBER} bestra/ || echo "⚠️ Build frontend ignoré"
                     echo "✅ Frontend image prête"
                 '''
             }
@@ -191,17 +183,6 @@ pipeline {
             echo '✅ ✅ ✅ PIPELINE DEVSECOPS RÉUSSI ! ✅ ✅ ✅'
             echo "🌐 Backend: https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
             echo "🌐 Frontend: https://${AZURE_APP_SERVICE_FRONTEND}.azurewebsites.net"
-            echo "📊 Rapport ZAP: zap-report.html"
-            emailext (
-                subject: "✅ SUCCESS: bestra-pipeline #${BUILD_NUMBER}",
-                body: """
-                    Pipeline DevSecOps terminé avec succès !
-                    Backend: https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net
-                    Frontend: https://${AZURE_APP_SERVICE_FRONTEND}.azurewebsites.net
-                    Build: #${BUILD_NUMBER}
-                """,
-                to: 'votre-email@example.com'
-            )
         }
         failure {
             echo '❌ ❌ ❌ PIPELINE ÉCHOUÉ ! ❌ ❌ ❌'
