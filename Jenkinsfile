@@ -1,6 +1,6 @@
 pipeline {
     agent any
-    
+
     environment {
         AZURE_RESOURCE_GROUP = 'bestra-rg'
         AZURE_APP_SERVICE_BACKEND = 'bestra-backend'
@@ -8,13 +8,12 @@ pipeline {
         AZURE_ACR_NAME = 'bestraacr'
         AZURE_REGION = 'francecentral'
         AZURE_STORAGE_ACCOUNT = 'eyasto2026'
-        
+
         BACKEND_IMAGE = "${AZURE_ACR_NAME}.azurecr.io/bestra-backend"
         BACKEND_PORT = '3000'
-        
         TRIVY_SKIP_DB_UPDATE = 'true'
     }
-    
+
     stages {
         stage('Start') {
             steps {
@@ -22,16 +21,16 @@ pipeline {
                 echo "Build #${BUILD_NUMBER}"
             }
         }
-        
+
         stage('Clone from GitHub') {
             steps {
-                git branch: 'main', 
+                git branch: 'main',
                     url: 'https://github.com/AuraLab-international/bestra.git',
                     credentialsId: 'github-final'
                 echo '✅ Code cloné'
             }
         }
-        
+
         stage('Prepare Image Info') {
             steps {
                 sh '''
@@ -40,30 +39,30 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('GitLeaks Secret Scan') {
             steps {
                 sh '''
-                    docker run --rm -v $(pwd):/path zricethezav/gitleaks detect --source=/path --verbose || echo "✅ Aucun secret"
+                    docker run --rm -v $(pwd):/path zricethezav/gitleaks detect --source=/path --verbose || echo "⚠️ Aucun secret critique détecté ou GitLeaks ignoré"
                 '''
             }
         }
-        
+
         stage('SAST - SonarQube') {
             steps {
                 sh '''
                     cd backend
-                    npx sonar-scanner -Dsonar.projectKey=bestra-backend -Dsonar.sources=. -Dsonar.host.url=http://localhost:9000 -Dsonar.login=admin -Dsonar.password=admin || echo "⚠️ SonarQube ignoré"
+                    npx sonar-scanner -Dsonar.projectKey=bestra-backend -Dsonar.sources=. -Dsonar.host.url=http://localhost:9000 || echo "⚠️ SonarQube ignoré"
                 '''
             }
         }
-        
+
         stage('SAST - Quality Gate') {
             steps {
                 echo '✅ Quality Gate validé'
             }
         }
-        
+
         stage('Snyk Dependency Scan') {
             steps {
                 sh '''
@@ -73,7 +72,7 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Parallel Build & Scan') {
             parallel {
                 stage('Backend Build + Trivy') {
@@ -102,7 +101,7 @@ pipeline {
                 }
             }
         }
-        
+
         stage('Docker Login to ACR') {
             steps {
                 withCredentials([usernamePassword(
@@ -116,7 +115,7 @@ pipeline {
                 }
             }
         }
-        
+
         stage('Push Backend to ACR') {
             steps {
                 sh '''
@@ -127,7 +126,7 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Push Frontend to DockerHub') {
             steps {
                 sh '''
@@ -135,17 +134,23 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Deploy Backend') {
             steps {
                 sh '''
                     echo "🚀 Déploiement du backend sur Azure App Service"
+                    az webapp config container set \
+                        --name ${AZURE_APP_SERVICE_BACKEND} \
+                        --resource-group ${AZURE_RESOURCE_GROUP} \
+                        --container-image-name ${BACKEND_IMAGE}:${BUILD_NUMBER} \
+                        --container-registry-url https://${AZURE_ACR_NAME}.azurecr.io
+                    az webapp restart --name ${AZURE_APP_SERVICE_BACKEND} --resource-group ${AZURE_RESOURCE_GROUP}
                     echo "✅ Backend déployé"
                     echo "🌐 https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
                 '''
             }
         }
-        
+
         stage('Deploy Frontend Webapp') {
             steps {
                 sh '''
@@ -155,20 +160,20 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('DAST - OWASP ZAP') {
             steps {
                 sh '''
                     BACKEND_URL="https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
                     docker run --rm -t owasp/zap2docker-stable \
-                        zap-baseline.py -t ${BACKEND_URL}/api/health \
+                        zap-baseline.py -t ${BACKEND_URL}/health \
                         -r zap-report.html || echo "⚠️ ZAP ignoré"
                 '''
                 archiveArtifacts artifacts: 'zap-report.html', allowEmptyArchive: true
             }
         }
     }
-    
+
     post {
         success {
             echo '✅ ✅ ✅ PIPELINE RÉUSSI ! ✅ ✅ ✅'
