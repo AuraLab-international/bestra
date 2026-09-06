@@ -4,22 +4,18 @@ pipeline {
     environment {
         AZURE_RESOURCE_GROUP = 'bestra-rg'
         AZURE_APP_SERVICE_BACKEND = 'bestra-backend'
-        AZURE_APP_SERVICE_FRONTEND = 'bestra-frontend'
         AZURE_ACR_NAME = 'bestraacr'
-        AZURE_REGION = 'francecentral'
-        AZURE_STORAGE_ACCOUNT = 'eyasto2026'
 
         BACKEND_IMAGE = "${AZURE_ACR_NAME}.azurecr.io/bestra-backend"
-        FRONTEND_IMAGE = "${AZURE_ACR_NAME}.azurecr.io/bestra-frontend"
-        BACKEND_PORT = '3000'
-        FRONTEND_PORT = '3000'
+
         TRIVY_SKIP_DB_UPDATE = 'true'
     }
 
     stages {
+
         stage('Start') {
             steps {
-                echo '🚀 Démarrage du pipeline DevSecOps'
+                echo '🚀 Démarrage du pipeline DevSecOps Bestra'
                 echo "Build #${BUILD_NUMBER}"
             }
         }
@@ -29,16 +25,21 @@ pipeline {
                 git branch: 'main',
                     url: 'https://github.com/AuraLab-international/bestra.git',
                     credentialsId: 'github-final'
+
                 echo '✅ Code cloné'
             }
         }
 
-        stage('Prepare Image Info') {
+        stage('Prepare') {
             steps {
                 sh '''
-                    echo "📦 Backend: ${BACKEND_IMAGE}:${BUILD_NUMBER}"
-                    echo "📦 Frontend: ${FRONTEND_IMAGE}:${BUILD_NUMBER}"
+                    echo "📦 Backend image: ${BACKEND_IMAGE}:${BUILD_NUMBER}"
+                    echo "📱 Application: Bestra Mobile"
                     echo "📅 $(date)"
+
+                    node --version
+                    npm --version
+                    docker --version
                 '''
             }
         }
@@ -46,7 +47,10 @@ pipeline {
         stage('GitLeaks Secret Scan') {
             steps {
                 sh '''
-                    docker run --rm -v $(pwd):/path zricethezav/gitleaks detect --source=/path --verbose || echo "⚠️ Aucun secret critique détecté ou GitLeaks ignoré"
+                    docker run --rm \
+                        -v "$(pwd):/path" \
+                        zricethezav/gitleaks \
+                        detect --source=/path --verbose
                 '''
             }
         }
@@ -55,14 +59,12 @@ pipeline {
             steps {
                 sh '''
                     cd backend
-                    npx sonar-scanner -Dsonar.projectKey=bestra-backend -Dsonar.sources=. -Dsonar.host.url=http://localhost:9000 || echo "⚠️ SonarQube ignoré"
-                '''
-            }
-        }
 
-        stage('SAST - Quality Gate') {
-            steps {
-                echo '✅ Quality Gate validé'
+                    npx sonar-scanner \
+                        -Dsonar.projectKey=bestra-backend \
+                        -Dsonar.sources=. \
+                        -Dsonar.host.url=http://localhost:9000
+                '''
             }
         }
 
@@ -70,50 +72,163 @@ pipeline {
             steps {
                 sh '''
                     cd backend
-                    npm install -g snyk || echo "⚠️ Snyk ignoré"
-                    snyk test --severity-threshold=high || echo "✅ Snyk terminé"
+
+                    npm install -g snyk
+
+                    snyk test \
+                        --severity-threshold=high
                 '''
             }
         }
 
-        stage('Parallel Build & Scan') {
-            parallel {
-                stage('Backend Build + Trivy') {
-                    steps {
-                        dir('backend') {
-                            sh '''
-                                npm config set registry https://registry.npmmirror.com
-                                npm install --no-fund --no-audit
-                                npm run build || echo "⚠️ No build script"
-                            '''
-                        }
-                        sh 'echo "✅ Trivy backend ignoré"'
-                    }
+        stage('Backend Validation') {
+            steps {
+                dir('backend') {
+                    sh '''
+                        echo "⚙️ Installation des dépendances Backend"
+
+                        npm ci --no-fund --no-audit
+
+                        echo "🔎 Vérification du projet Backend"
+
+                        npx prisma generate
+
+                        echo "✅ Backend validé"
+                    '''
                 }
-                stage('Frontend Build + Scan') {
-                    steps {
-                        dir('bestra') {
-                            sh '''
-                                npm config set registry https://registry.npmmirror.com
-                                npm install --no-fund --no-audit
-                                PUBLIC_SERVER_IP="https://bestra-backend.azurewebsites.net" npm run build
-                            '''
-                        }
-                        sh 'echo "✅ Trivy frontend ignoré"'
-                    }
+            }
+        }
+
+        stage('ReactLynx Build') {
+            steps {
+                dir('bestra') {
+                    sh '''
+                        echo "📱 Build ReactLynx"
+
+                        npm ci --no-fund --no-audit
+
+                        npm run build
+
+                        echo "📦 Vérification du bundle Android"
+
+                        test -f dist/main.lynx.bundle
+
+                        ls -lh dist/main.lynx.bundle
+
+                        echo "✅ ReactLynx build réussi"
+                    '''
                 }
+            }
+        }
+
+        stage('Prepare Android Bundle') {
+            steps {
+                sh '''
+                    echo "📲 Copie du bundle ReactLynx vers Android"
+
+                    cp \
+                        bestra/dist/main.lynx.bundle \
+                        integrating-lynx/android/KotlinEmptyProject/app/src/main/assets/main.lynx.bundle
+
+                    ls -lh \
+                        integrating-lynx/android/KotlinEmptyProject/app/src/main/assets/main.lynx.bundle
+
+                    echo "✅ Bundle Android préparé"
+                '''
+            }
+        }
+
+        stage('Build Android APK') {
+            steps {
+                sh '''
+                    echo "🐳 Construction de l'image Android"
+
+                    docker build \
+                        -f Dockerfile.android \
+                        -t bestra-android:${BUILD_NUMBER} \
+                        .
+
+                    echo "📦 Création du container Android"
+
+                    CONTAINER_ID=$(docker create bestra-android:${BUILD_NUMBER})
+
+                    echo "📥 Extraction de l'APK"
+
+                    docker cp \
+                        ${CONTAINER_ID}:/app/app/build/outputs/apk/debug/app-debug.apk \
+                        ./bestra-debug.apk
+
+                    docker rm ${CONTAINER_ID}
+
+                    ls -lh ./bestra-debug.apk
+
+                    echo "✅ APK Android généré"
+                '''
+            }
+        }
+
+        stage('Archive Android APK') {
+            steps {
+                archiveArtifacts artifacts: 'bestra-debug.apk',
+                    fingerprint: true
+
+                echo '📦 APK archivé dans Jenkins'
+            }
+        }
+
+        stage('Build Backend Docker') {
+            steps {
+                sh '''
+                    echo "🐳 Build Docker Backend"
+
+                    docker build \
+                        -f backend/Dockerfile \
+                        -t ${BACKEND_IMAGE}:${BUILD_NUMBER} \
+                        backend/
+
+                    docker tag \
+                        ${BACKEND_IMAGE}:${BUILD_NUMBER} \
+                        ${BACKEND_IMAGE}:latest
+
+                    echo "✅ Backend Docker image créée"
+                '''
+            }
+        }
+
+        stage('Trivy Backend Scan') {
+            steps {
+                sh '''
+                    echo "🔐 Scan Trivy Backend"
+
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        aquasec/trivy:latest \
+                        image \
+                        --severity HIGH,CRITICAL \
+                        --ignore-unfixed \
+                        ${BACKEND_IMAGE}:${BUILD_NUMBER}
+
+                    echo "✅ Trivy terminé"
+                '''
             }
         }
 
         stage('Docker Login to ACR') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'azure-acr-credentials',
-                    usernameVariable: 'ACR_USERNAME',
-                    passwordVariable: 'ACR_PASSWORD'
-                )]) {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'azure-acr-credentials',
+                        usernameVariable: 'ACR_USERNAME',
+                        passwordVariable: 'ACR_PASSWORD'
+                    )
+                ]) {
                     sh '''
-                        echo $ACR_PASSWORD | docker login ${AZURE_ACR_NAME}.azurecr.io -u $ACR_USERNAME --password-stdin
+                        echo "$ACR_PASSWORD" | docker login \
+                            ${AZURE_ACR_NAME}.azurecr.io \
+                            -u "$ACR_USERNAME" \
+                            --password-stdin
+
+                        echo "✅ Login ACR réussi"
                     '''
                 }
             }
@@ -122,21 +237,13 @@ pipeline {
         stage('Push Backend to ACR') {
             steps {
                 sh '''
-                    docker build -f backend/Dockerfile -t ${BACKEND_IMAGE}:${BUILD_NUMBER} backend/
-                    docker tag ${BACKEND_IMAGE}:${BUILD_NUMBER} ${BACKEND_IMAGE}:latest
-                    docker push ${BACKEND_IMAGE}:${BUILD_NUMBER} || echo "⚠️ Push ignoré"
-                    docker push ${BACKEND_IMAGE}:latest || echo "⚠️ Push ignoré"
-                '''
-            }
-        }
+                    echo "📤 Push Backend vers Azure Container Registry"
 
-        stage('Push Frontend to ACR') {
-            steps {
-                sh '''
-                    docker build -f bestra/Dockerfile -t ${FRONTEND_IMAGE}:${BUILD_NUMBER} bestra/
-                    docker tag ${FRONTEND_IMAGE}:${BUILD_NUMBER} ${FRONTEND_IMAGE}:latest
-                    docker push ${FRONTEND_IMAGE}:${BUILD_NUMBER} || echo "⚠️ Push ignoré"
-                    docker push ${FRONTEND_IMAGE}:latest || echo "⚠️ Push ignoré"
+                    docker push ${BACKEND_IMAGE}:${BUILD_NUMBER}
+
+                    docker push ${BACKEND_IMAGE}:latest
+
+                    echo "✅ Backend poussé vers ACR"
                 '''
             }
         }
@@ -144,50 +251,47 @@ pipeline {
         stage('Deploy Backend') {
             steps {
                 withCredentials([
-                    usernamePassword(credentialsId: 'azure-service-principal', usernameVariable: 'AZURE_CLIENT_ID', passwordVariable: 'AZURE_CLIENT_SECRET'),
-                    string(credentialsId: 'azure-tenant-id', variable: 'AZURE_TENANT_ID'),
-                    string(credentialsId: 'azure-subscription-id', variable: 'AZURE_SUBSCRIPTION_ID')
+                    usernamePassword(
+                        credentialsId: 'azure-service-principal',
+                        usernameVariable: 'AZURE_CLIENT_ID',
+                        passwordVariable: 'AZURE_CLIENT_SECRET'
+                    ),
+                    string(
+                        credentialsId: 'azure-tenant-id',
+                        variable: 'AZURE_TENANT_ID'
+                    ),
+                    string(
+                        credentialsId: 'azure-subscription-id',
+                        variable: 'AZURE_SUBSCRIPTION_ID'
+                    )
                 ]) {
                     sh '''
-                        az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
-                        az account set --subscription $AZURE_SUBSCRIPTION_ID
+                        echo "☁️ Connexion Azure"
 
-                        echo "🚀 Déploiement du backend sur Azure App Service"
+                        az login \
+                            --service-principal \
+                            -u "$AZURE_CLIENT_ID" \
+                            -p "$AZURE_CLIENT_SECRET" \
+                            --tenant "$AZURE_TENANT_ID"
+
+                        az account set \
+                            --subscription "$AZURE_SUBSCRIPTION_ID"
+
+                        echo "🚀 Déploiement Backend"
+
                         az webapp config container set \
                             --name ${AZURE_APP_SERVICE_BACKEND} \
                             --resource-group ${AZURE_RESOURCE_GROUP} \
                             --container-image-name ${BACKEND_IMAGE}:${BUILD_NUMBER} \
                             --container-registry-url https://${AZURE_ACR_NAME}.azurecr.io
 
-                        az webapp restart --name ${AZURE_APP_SERVICE_BACKEND} --resource-group ${AZURE_RESOURCE_GROUP}
+                        az webapp restart \
+                            --name ${AZURE_APP_SERVICE_BACKEND} \
+                            --resource-group ${AZURE_RESOURCE_GROUP}
+
                         echo "✅ Backend déployé"
+
                         echo "🌐 https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy Frontend Webapp') {
-            steps {
-                withCredentials([
-                    usernamePassword(credentialsId: 'azure-service-principal', usernameVariable: 'AZURE_CLIENT_ID', passwordVariable: 'AZURE_CLIENT_SECRET'),
-                    string(credentialsId: 'azure-tenant-id', variable: 'AZURE_TENANT_ID'),
-                    string(credentialsId: 'azure-subscription-id', variable: 'AZURE_SUBSCRIPTION_ID')
-                ]) {
-                    sh '''
-                        az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
-                        az account set --subscription $AZURE_SUBSCRIPTION_ID
-
-                        echo "🚀 Déploiement du frontend sur Azure App Service"
-                        az webapp config container set \
-                            --name ${AZURE_APP_SERVICE_FRONTEND} \
-                            --resource-group ${AZURE_RESOURCE_GROUP} \
-                            --container-image-name ${FRONTEND_IMAGE}:${BUILD_NUMBER} \
-                            --container-registry-url https://${AZURE_ACR_NAME}.azurecr.io
-
-                        az webapp restart --name ${AZURE_APP_SERVICE_FRONTEND} --resource-group ${AZURE_RESOURCE_GROUP}
-                        echo "✅ Frontend déployé"
-                        echo "🌐 https://${AZURE_APP_SERVICE_FRONTEND}.azurewebsites.net"
                     '''
                 }
             }
@@ -197,24 +301,40 @@ pipeline {
             steps {
                 sh '''
                     BACKEND_URL="https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
-                    docker run --rm -t owasp/zap2docker-stable \
-                        zap-baseline.py -t ${BACKEND_URL}/health \
-                        -r zap-report.html || echo "⚠️ ZAP ignoré"
+
+                    echo "🔎 OWASP ZAP sur ${BACKEND_URL}/health"
+
+                    docker run --rm \
+                        -t \
+                        owasp/zap2docker-stable \
+                        zap-baseline.py \
+                        -t "${BACKEND_URL}/health" \
+                        -r zap-report.html
                 '''
-                archiveArtifacts artifacts: 'zap-report.html', allowEmptyArchive: true
+
+                archiveArtifacts artifacts: 'zap-report.html',
+                    allowEmptyArchive: true
             }
         }
     }
 
     post {
+
         success {
-            echo '✅ ✅ ✅ PIPELINE RÉUSSI ! ✅ ✅ ✅'
-            echo "🌐 Backend: https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
-            echo "🌐 Frontend: https://${AZURE_APP_SERVICE_FRONTEND}.azurewebsites.net"
+            echo '======================================'
+            echo '✅ PIPELINE BEStra RÉUSSI'
+            echo '======================================'
+
+            echo "📱 APK: bestra-debug.apk"
+            echo "⚙️ Backend: https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
         }
+
         failure {
-            echo '❌ ❌ ❌ PIPELINE ÉCHOUÉ ! ❌ ❌ ❌'
+            echo '======================================'
+            echo '❌ PIPELINE BEStra ÉCHOUÉ'
+            echo '======================================'
         }
+
         always {
             echo "📊 Durée: ${currentBuild.durationString}"
         }

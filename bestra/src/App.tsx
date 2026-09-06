@@ -1,6 +1,6 @@
 import { useEffect, useState } from '@lynx-js/react'
 import './App.css'
-import bestraLogo from '../../static/Bestra-logo.webp'
+import bestraLogo from '../static/Bestra-logo.webp'
 import { Sidebar } from './components/Sidebar.js'
 import { ChatContainer } from './components/ChatContainer.js'
 import { MessageInput } from './components/MessageInput.js'
@@ -67,7 +67,7 @@ export function App() {
         })
       }
     } else {
-      setBridgeStatus("Module Missing")
+      setBridgeStatus("Web Mode")
     }
   }, [])
 
