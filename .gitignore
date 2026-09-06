@@ -10,3 +10,8 @@ dist/
 # TypeScript
 *.tsbuildinfo
 bestra-debug.apk
+# Secrets / environment
+backend/.env
+
+# Private TLS keys
+backend/certs/*.key
