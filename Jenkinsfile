@@ -60,7 +60,8 @@ pipeline {
                 sh '''
                     echo "📦 Backend image : ${BACKEND_IMAGE}:${BUILD_NUMBER}"
                     echo "📱 Application : Bestra Mobile"
-                    echo "📅 Date : $(date)"
+                    echo "📅 Date :"
+                    date
 
                     echo ""
                     echo "Node :"
