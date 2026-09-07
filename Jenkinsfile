@@ -91,7 +91,97 @@ pipeline {
                     echo "🔐 Scan des secrets avec GitLeaks"
 
                     docker run --rm \
-                        -v "$(pwd):/path" \
+pipeline {
+
+    agent any
+
+    environment {
+
+        // ============================================================
+        // AZURE
+        // ============================================================
+        AZURE_RESOURCE_GROUP = 'bestra-rg'
+        AZURE_APP_SERVICE_BACKEND = 'bestra-backend'
+        AZURE_ACR_NAME = 'bestraacr'
+
+        // Image Backend
+        BACKEND_IMAGE = "${AZURE_ACR_NAME}.azurecr.io/bestra-backend"
+
+        // Trivy
+        TRIVY_SKIP_DB_UPDATE = 'true'
+
+        // SonarQube
+        SONAR_HOST_URL = 'http://localhost:9000'
+    }
+
+    stages {
+
+        // ============================================================
+        // 1. START
+        // ============================================================
+        stage('Start') {
+            steps {
+                echo '🚀 Démarrage du pipeline DevSecOps Bestra'
+                echo "🔢 Build #${BUILD_NUMBER}"
+                echo '📱 Application : Bestra Mobile'
+            }
+        }
+
+        // ============================================================
+        // 2. CLONE
+        // ============================================================
+        stage('Clone from GitHub') {
+            steps {
+
+                git(
+                    branch: 'main',
+                    url: 'https://github.com/AuraLab-international/bestra.git',
+                    credentialsId: 'github-final'
+                )
+
+                echo '✅ Code cloné depuis GitHub'
+            }
+        }
+
+        // ============================================================
+        // 3. PREPARE
+        // ============================================================
+        stage('Prepare') {
+            steps {
+                sh '''
+                    echo "📦 Backend image : ${BACKEND_IMAGE}:${BUILD_NUMBER}"
+                    echo "📱 Application : Bestra Mobile"
+                    echo "📅 Date : $(date)"
+
+                    echo ""
+                    echo "🟢 Node Jenkins :"
+                    node --version
+
+                    echo ""
+                    echo "🟢 NPM Jenkins :"
+                    npm --version
+
+                    echo ""
+                    echo "🐳 Docker :"
+                    docker --version
+
+                    echo ""
+                    echo "🔧 Git :"
+                    git --version
+                '''
+            }
+        }
+
+        // ============================================================
+        // 4. GITLEAKS
+        // ============================================================
+        stage('GitLeaks Secret Scan') {
+            steps {
+                sh '''
+                    echo "🔐 Scan des secrets avec GitLeaks"
+
+                    docker run --rm \
+                        -v "$WORKSPACE:/path" \
                         zricethezav/gitleaks:latest \
                         detect \
                         --source=/path \
@@ -101,7 +191,6 @@ pipeline {
                 '''
             }
         }
-
 
         // ============================================================
         // 5. SONARQUBE
@@ -121,10 +210,11 @@ pipeline {
 
                         cd backend
 
-                        npx sonar-scanner \
+                        npx --yes sonar-scanner \
                             -Dsonar.projectKey=Bestra-Backend \
+                            -Dsonar.projectName="Bestra Backend" \
                             -Dsonar.sources=. \
-                            -Dsonar.host.url=${SONAR_HOST_URL} \
+                            -Dsonar.host.url="${SONAR_HOST_URL}" \
                             -Dsonar.login="$SONAR_TOKEN"
 
                         echo "✅ Analyse SonarQube terminée"
@@ -133,28 +223,41 @@ pipeline {
             }
         }
 
-
         // ============================================================
         // 6. SNYK
         // ============================================================
         stage('Snyk Dependency Scan') {
             steps {
 
-                sh '''
-                    echo "🛡️ Analyse des dépendances avec Snyk"
+                withCredentials([
+                    string(
+                        credentialsId: 'snyk-token',
+                        variable: 'SNYK_TOKEN'
+                    )
+                ]) {
 
-                    cd backend
+                    sh '''
+                        echo "🛡️ Analyse des dépendances avec Snyk"
 
-                    echo "📦 Lancement de Snyk avec npx"
+                        cd backend
 
-                    npx --yes snyk test \
-                        --severity-threshold=high
+                        echo "📦 Installation / lancement de Snyk"
 
-                    echo "✅ Snyk terminé"
-                '''
+                        docker run --rm \
+                            -e SNYK_TOKEN="$SNYK_TOKEN" \
+                            -v "$PWD:/app" \
+                            -w /app \
+                            node:24-bookworm-slim \
+                            bash -lc '
+                                npx --yes snyk test \
+                                    --severity-threshold=high
+                            '
+
+                        echo "✅ Snyk terminé"
+                    '''
+                }
             }
         }
-
 
         // ============================================================
         // 7. BACKEND VALIDATION
@@ -162,31 +265,22 @@ pipeline {
         stage('Backend Validation') {
             steps {
 
-                dir('backend') {
+                sh '''
+                    echo "⚙️ Validation du Backend"
 
-                    sh '''
-                        echo "⚙️ Installation des dépendances Backend"
+                    docker run --rm \
+                        -v "$WORKSPACE/backend:/app" \
+                        -w /app \
+                        node:24-bookworm-slim \
+                        bash -lc '
+                            npm ci --no-fund --no-audit
+                            npx prisma generate
+                        '
 
-                        npm ci --no-fund --no-audit
-
-                        echo "🔍 Génération Prisma"
-
-                        npx prisma generate
-
-                        echo "🔎 Vérification Node.js"
-
-                        node --version
-
-                        echo "🔎 Vérification NPM"
-
-                        npm --version
-
-                        echo "✅ Backend validé"
-                    '''
-                }
+                    echo "✅ Backend validé"
+                '''
             }
         }
-
 
         // ============================================================
         // 8. REACTLYNX BUILD
@@ -194,32 +288,29 @@ pipeline {
         stage('ReactLynx Build') {
             steps {
 
-                dir('bestra') {
+                sh '''
+                    echo "📱 Build de l'application ReactLynx"
 
-                    sh '''
-                        echo "📱 Build de l'application ReactLynx"
+                    docker run --rm \
+                        -u "$(id -u):$(id -g)" \
+                        -v "$WORKSPACE/bestra:/app" \
+                        -w /app \
+                        node:24-bookworm-slim \
+                        bash -lc '
+                            npm ci --no-fund --no-audit
+                            npm run build
+                        '
 
-                        docker run --rm \
-                            -v "$(pwd):/app" \
-                            -w /app \
-                            node:24-bookworm-slim \
-                            bash -c "
-                                npm ci --no-fund --no-audit &&
-                                npm run build
-                            "
+                    echo "📦 Vérification du bundle Lynx"
 
-                        echo "📦 Vérification du bundle Android"
+                    test -f bestra/dist/main.lynx.bundle
 
-                        test -f dist/main.lynx.bundle
+                    ls -lh bestra/dist/main.lynx.bundle
 
-                        ls -lh dist/main.lynx.bundle
-
-                        echo "✅ ReactLynx build réussi"
-                    '''
-                }
+                    echo "✅ ReactLynx build réussi"
+                '''
             }
         }
-
 
         // ============================================================
         // 9. PREPARE ANDROID
@@ -244,7 +335,6 @@ pipeline {
             }
         }
 
-
         // ============================================================
         // 10. BUILD ANDROID APK
         // ============================================================
@@ -252,7 +342,7 @@ pipeline {
             steps {
 
                 sh '''
-                    echo "🐳 Construction de l'image Android"
+                    echo "🤖 Construction de l'image Android"
 
                     docker build \
                         -f Dockerfile.android \
@@ -280,7 +370,6 @@ pipeline {
             }
         }
 
-
         // ============================================================
         // 11. ARCHIVE APK
         // ============================================================
@@ -296,7 +385,6 @@ pipeline {
             }
         }
 
-
         // ============================================================
         // 12. BUILD BACKEND DOCKER
         // ============================================================
@@ -311,21 +399,16 @@ pipeline {
                         -t ${BACKEND_IMAGE}:${BUILD_NUMBER} \
                         backend/
 
-                    echo "🏷️ Création du tag latest"
-
                     docker tag \
                         ${BACKEND_IMAGE}:${BUILD_NUMBER} \
                         ${BACKEND_IMAGE}:latest
 
-                    echo "📦 Images Backend :"
+                    echo "✅ Image Backend créée"
 
                     docker images | grep bestra-backend
-
-                    echo "✅ Image Backend créée"
                 '''
             }
         }
-
 
         // ============================================================
         // 13. TRIVY
@@ -349,9 +432,8 @@ pipeline {
             }
         }
 
-
         // ============================================================
-        // 14. LOGIN AZURE ACR
+        // 14. LOGIN ACR
         // ============================================================
         stage('Docker Login to ACR') {
             steps {
@@ -372,15 +454,14 @@ pipeline {
                             -u "$ACR_USERNAME" \
                             --password-stdin
 
-                        echo "✅ Login ACR réussi"
+                        echo "✅ Login Azure Container Registry réussi"
                     '''
                 }
             }
         }
 
-
         // ============================================================
-        // 15. PUSH BACKEND ACR
+        // 15. PUSH ACR
         // ============================================================
         stage('Push Backend to ACR') {
             steps {
@@ -399,9 +480,8 @@ pipeline {
             }
         }
 
-
         // ============================================================
-        // 16. DEPLOY BACKEND AZURE
+        // 16. DEPLOY AZURE
         // ============================================================
         stage('Deploy Backend') {
             steps {
@@ -429,7 +509,6 @@ pipeline {
                         usernameVariable: 'ACR_USERNAME',
                         passwordVariable: 'ACR_PASSWORD'
                     )
-
                 ]) {
 
                     sh '''
@@ -449,10 +528,10 @@ pipeline {
                         az webapp config container set \
                             --name "${AZURE_APP_SERVICE_BACKEND}" \
                             --resource-group "${AZURE_RESOURCE_GROUP}" \
-                            --docker-custom-image-name "${BACKEND_IMAGE}:${BUILD_NUMBER}" \
-                            --docker-registry-server-url "https://${AZURE_ACR_NAME}.azurecr.io" \
-                            --docker-registry-server-user "$ACR_USERNAME" \
-                            --docker-registry-server-password "$ACR_PASSWORD"
+                            --container-image-name "${BACKEND_IMAGE}:${BUILD_NUMBER}" \
+                            --container-registry-url "https://${AZURE_ACR_NAME}.azurecr.io" \
+                            --container-registry-user "$ACR_USERNAME" \
+                            --container-registry-password "$ACR_PASSWORD"
 
                         echo "🔄 Redémarrage de l'App Service"
 
@@ -464,22 +543,19 @@ pipeline {
 
                         sleep 30
 
-                        echo "🔎 État du Backend"
+                        echo "🌐 Vérification de l'App Service"
 
                         az webapp show \
                             --name "${AZURE_APP_SERVICE_BACKEND}" \
                             --resource-group "${AZURE_RESOURCE_GROUP}" \
                             --query "state" \
-                            --output tsv
-
-                        echo "🌐 URL Backend : https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
+                            -o tsv
 
                         echo "✅ Backend déployé sur Azure"
                     '''
                 }
             }
         }
-
 
         // ============================================================
         // 17. DAST OWASP ZAP
@@ -492,10 +568,10 @@ pipeline {
 
                     BACKEND_URL="https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
 
-                    echo "🎯 Target : ${BACKEND_URL}/health"
+                    echo "🌐 Target : ${BACKEND_URL}/health"
 
                     docker run --rm \
-                        -v "$(pwd):/zap/wrk:rw" \
+                        -v "$WORKSPACE:/zap/wrk/:rw" \
                         ghcr.io/zaproxy/zaproxy:stable \
                         zap-baseline.py \
                         -t "${BACKEND_URL}/health" \
@@ -505,7 +581,6 @@ pipeline {
                     echo "📄 Vérification du rapport ZAP"
 
                     if [ -f zap-report.html ]; then
-                        ls -lh zap-report.html
                         echo "✅ Rapport ZAP généré"
                     else
                         echo "⚠️ Rapport ZAP non généré"
@@ -521,24 +596,26 @@ pipeline {
         }
     }
 
-
-    // ================================================================
+    // ============================================================
     // POST
-    // ================================================================
+    // ============================================================
     post {
 
         success {
+
             echo '=============================================='
             echo '✅ PIPELINE BESTRA RÉUSSI'
             echo '=============================================='
 
-            echo '📱 APK : bestra-debug.apk'
-            echo '⚙️ Backend : https://bestra-backend.azurewebsites.net'
+            echo "📱 APK : bestra-debug.apk"
+
+            echo "☁️ Backend : https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
 
             echo '=============================================='
         }
 
         failure {
+
             echo '=============================================='
             echo '❌ PIPELINE BESTRA ÉCHOUÉ'
             echo '=============================================='
@@ -549,7 +626,10 @@ pipeline {
         }
 
         always {
+
             echo "📊 Durée du pipeline : ${currentBuild.durationString}"
+
+            echo '=============================================='
         }
     }
 }
