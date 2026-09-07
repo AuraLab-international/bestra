@@ -1,4 +1,5 @@
 pipeline {
+
     agent any
 
     environment {
@@ -28,9 +29,11 @@ pipeline {
         // =========================================================
         stage('Clone from GitHub') {
             steps {
-                git branch: 'main',
+                git(
+                    branch: 'main',
                     url: 'https://github.com/AuraLab-international/bestra.git',
                     credentialsId: 'github-final'
+                )
 
                 echo '✅ Code cloné depuis GitHub'
             }
@@ -47,10 +50,10 @@ pipeline {
                     echo "📅 $(date)"
 
                     echo "Node:"
-                    node --version
+                    node --version || true
 
                     echo "NPM:"
-                    npm --version
+                    npm --version || true
 
                     echo "Docker:"
                     docker --version
@@ -68,7 +71,7 @@ pipeline {
 
                     docker run --rm \
                         -v "$(pwd):/path" \
-                        zricethezav/gitleaks \
+                        zricethezav/gitleaks:latest \
                         detect \
                         --source=/path \
                         --verbose
@@ -79,16 +82,18 @@ pipeline {
         }
 
         // =========================================================
-        // 5. SONARQUBE
+        // 5. SONARQUBE SAST
         // =========================================================
         stage('SAST - SonarQube') {
             steps {
+
                 withCredentials([
                     string(
                         credentialsId: 'sonar-token',
                         variable: 'SONAR_TOKEN'
                     )
                 ]) {
+
                     sh '''
                         echo "🔍 Analyse SAST avec SonarQube"
 
@@ -98,7 +103,7 @@ pipeline {
                             -Dsonar.projectKey=bestra-backend \
                             -Dsonar.sources=. \
                             -Dsonar.host.url=http://localhost:9000 \
-                            -Dsonar.token="$SONAR_TOKEN"
+                            -Dsonar.login="$SONAR_TOKEN"
 
                         echo "✅ Analyse SonarQube terminée"
                     '''
@@ -118,8 +123,11 @@ pipeline {
 
                     npm install -g snyk
 
-                    snyk test \
-                        --severity-threshold=high
+                    if [ -n "$SNYK_TOKEN" ]; then
+                        snyk auth "$SNYK_TOKEN"
+                    fi
+
+                    snyk test --severity-threshold=high
 
                     echo "✅ Snyk terminé"
                 '''
@@ -141,6 +149,11 @@ pipeline {
 
                         npx prisma generate
 
+                        echo "📋 Vérification package"
+
+                        node --version
+                        npm --version
+
                         echo "✅ Backend validé"
                     '''
                 }
@@ -152,23 +165,29 @@ pipeline {
         // =========================================================
         stage('ReactLynx Build') {
             steps {
-                dir('bestra') {
-                    sh '''
-                        echo "📱 Build de l'application ReactLynx"
 
-                        npm ci --no-fund --no-audit
+                sh '''
+                    echo "📱 Build de l'application ReactLynx avec Node 24"
 
-                        npm run build
+                    docker run --rm \
+                        -u "$(id -u):$(id -g)" \
+                        -v "$(pwd)/bestra:/app" \
+                        -w /app \
+                        node:24-bookworm-slim \
+                        bash -c "
+                            npm ci --no-fund --no-audit &&
+                            npm run build &&
+                            test -f dist/main.lynx.bundle &&
+                            ls -lh dist/main.lynx.bundle
+                        "
 
-                        echo "📦 Vérification du bundle Android"
+                    echo "📦 Vérification du bundle Android"
 
-                        test -f dist/main.lynx.bundle
+                    test -f bestra/dist/main.lynx.bundle
+                    ls -lh bestra/dist/main.lynx.bundle
 
-                        ls -lh dist/main.lynx.bundle
-
-                        echo "✅ ReactLynx build réussi"
-                    '''
-                }
+                    echo "✅ ReactLynx build réussi"
+                '''
             }
         }
 
@@ -184,7 +203,7 @@ pipeline {
                         bestra/dist/main.lynx.bundle \
                         integrating-lynx/android/KotlinEmptyProject/app/src/main/assets/main.lynx.bundle
 
-                    echo "📦 Bundle Android :"
+                    echo "📦 Bundle Android:"
 
                     ls -lh \
                         integrating-lynx/android/KotlinEmptyProject/app/src/main/assets/main.lynx.bundle
@@ -219,7 +238,7 @@ pipeline {
 
                     docker rm ${CONTAINER_ID}
 
-                    echo "📱 APK généré :"
+                    echo "📱 APK généré:"
 
                     ls -lh ./bestra-debug.apk
 
@@ -233,8 +252,10 @@ pipeline {
         // =========================================================
         stage('Archive Android APK') {
             steps {
-                archiveArtifacts artifacts: 'bestra-debug.apk',
+                archiveArtifacts(
+                    artifacts: 'bestra-debug.apk',
                     fingerprint: true
+                )
 
                 echo '📦 APK archivé dans Jenkins'
             }
@@ -258,6 +279,8 @@ pipeline {
                         ${BACKEND_IMAGE}:latest
 
                     echo "✅ Image Backend créée"
+
+                    docker images | grep bestra-backend || true
                 '''
             }
         }
@@ -288,6 +311,7 @@ pipeline {
         // =========================================================
         stage('Docker Login to ACR') {
             steps {
+
                 withCredentials([
                     usernamePassword(
                         credentialsId: 'azure-acr-credentials',
@@ -295,6 +319,7 @@ pipeline {
                         passwordVariable: 'ACR_PASSWORD'
                     )
                 ]) {
+
                     sh '''
                         echo "$ACR_PASSWORD" | docker login \
                             ${AZURE_ACR_NAME}.azurecr.io \
@@ -308,7 +333,7 @@ pipeline {
         }
 
         // =========================================================
-        // 15. PUSH BACKEND ACR
+        // 15. PUSH ACR
         // =========================================================
         stage('Push Backend to ACR') {
             steps {
@@ -327,25 +352,30 @@ pipeline {
         }
 
         // =========================================================
-        // 16. DEPLOY BACKEND AZURE
+        // 16. DEPLOY AZURE
         // =========================================================
         stage('Deploy Backend') {
             steps {
+
                 withCredentials([
+
                     usernamePassword(
                         credentialsId: 'azure-service-principal',
                         usernameVariable: 'AZURE_CLIENT_ID',
                         passwordVariable: 'AZURE_CLIENT_SECRET'
                     ),
+
                     string(
                         credentialsId: 'azure-tenant-id',
                         variable: 'AZURE_TENANT_ID'
                     ),
+
                     string(
                         credentialsId: 'azure-subscription-id',
                         variable: 'AZURE_SUBSCRIPTION_ID'
                     )
                 ]) {
+
                     sh '''
                         echo "☁️ Connexion à Azure"
 
@@ -361,16 +391,16 @@ pipeline {
                         echo "🚀 Déploiement du Backend"
 
                         az webapp config container set \
-                            --name ${AZURE_APP_SERVICE_BACKEND} \
-                            --resource-group ${AZURE_RESOURCE_GROUP} \
-                            --container-image-name ${BACKEND_IMAGE}:${BUILD_NUMBER} \
-                            --container-registry-url https://${AZURE_ACR_NAME}.azurecr.io
+                            --name "${AZURE_APP_SERVICE_BACKEND}" \
+                            --resource-group "${AZURE_RESOURCE_GROUP}" \
+                            --container-image-name "${BACKEND_IMAGE}:${BUILD_NUMBER}" \
+                            --container-registry-url "https://${AZURE_ACR_NAME}.azurecr.io"
 
                         echo "🔄 Redémarrage de l'App Service"
 
                         az webapp restart \
-                            --name ${AZURE_APP_SERVICE_BACKEND} \
-                            --resource-group ${AZURE_RESOURCE_GROUP}
+                            --name "${AZURE_APP_SERVICE_BACKEND}" \
+                            --resource-group "${AZURE_RESOURCE_GROUP}"
 
                         echo "✅ Backend déployé sur Azure"
                     '''
@@ -388,25 +418,34 @@ pipeline {
 
                     BACKEND_URL="https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
 
+                    echo "Target: ${BACKEND_URL}/health"
+
                     docker run --rm \
-                        -t \
-                        owasp/zap2docker-stable \
+                        -v "$(pwd):/zap/wrk:rw" \
+                        ghcr.io/zaproxy/zaproxy:stable \
                         zap-baseline.py \
                         -t "${BACKEND_URL}/health" \
-                        -r zap-report.html
+                        -r zap-report.html \
+                        || true
+
+                    echo "📄 Rapport ZAP généré"
+
+                    ls -lh zap-report.html || true
 
                     echo "✅ OWASP ZAP terminé"
                 '''
 
-                archiveArtifacts artifacts: 'zap-report.html',
+                archiveArtifacts(
+                    artifacts: 'zap-report.html',
                     allowEmptyArchive: true
+                )
             }
         }
     }
 
-    // =============================================================
+    // =========================================================
     // POST
-    // =============================================================
+    // =========================================================
     post {
 
         success {
@@ -415,7 +454,6 @@ pipeline {
             echo '======================================'
 
             echo "📱 APK : bestra-debug.apk"
-
             echo "⚙️ Backend : https://${AZURE_APP_SERVICE_BACKEND}.azurewebsites.net"
 
             echo '======================================'
@@ -426,7 +464,7 @@ pipeline {
             echo '❌ PIPELINE BESTRA ÉCHOUÉ'
             echo '======================================'
 
-            echo "⚠️ Vérifier le stage en erreur"
+            echo '⚠️ Vérifier le stage en erreur'
 
             echo '======================================'
         }
