@@ -97,30 +97,26 @@ pipeline {
         }
 
         stage('Snyk Dependency Scan') {
-            steps {
-                withCredentials([
-                    string(
-                        credentialsId: 'snyk-token',
-                        variable: 'SNYK_TOKEN'
-                    )
-                ]) {
-                    sh '''
-                        echo "Running Snyk dependency scan..."
+    steps {
+        withCredentials([
+            string(
+                credentialsId: 'snyk-token',
+                variable: 'SNYK_TOKEN'
+            )
+        ]) {
+            sh '''
+                echo "Running Snyk dependency scan..."
 
-                        cd backend
+                cd backend
 
-                        npm install -g snyk
+                npx --yes snyk test \
+                    --severity-threshold=high
 
-                        snyk auth "$SNYK_TOKEN"
-
-                        snyk test \
-                            --severity-threshold=high
-
-                        echo "Snyk scan completed"
-                    '''
-                }
-            }
+                echo "Snyk scan completed"
+            '''
         }
+    }
+}
 
         stage('Backend Validation') {
             steps {
