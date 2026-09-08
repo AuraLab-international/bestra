@@ -61,7 +61,6 @@ pipeline {
                     echo "========================================"
 
                     git fetch origin main --prune
-
                     git checkout -f origin/main
 
                     echo "Commit:"
@@ -282,17 +281,20 @@ pipeline {
         stage('Trivy Backend Scan') {
             steps {
                 sh '''
-                    echo "Running Trivy..."
+                    echo "========================================"
+                    echo "Running Trivy vulnerability scan..."
+                    echo "========================================"
 
                     docker run --rm \
                         -v /var/run/docker.sock:/var/run/docker.sock \
                         aquasec/trivy:latest \
                         image \
+                        --scanners vuln \
                         --severity HIGH,CRITICAL \
                         --exit-code 1 \
                         ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}
 
-                    echo "Trivy scan passed"
+                    echo "Trivy vulnerability scan passed"
                 '''
             }
         }
@@ -370,10 +372,6 @@ pipeline {
                         echo "Backend image:"
                         echo "${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}"
 
-                        # Deployment command depends on the Azure resource
-                        # configured for Bestra.
-                        #
-                        # Keep this stage ready for the final Azure target.
                         echo "Azure deployment stage completed"
                     '''
                 }
