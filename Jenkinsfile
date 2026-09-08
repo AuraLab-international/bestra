@@ -412,29 +412,30 @@ pipeline {
         // ============================================================
 
         stage('Trivy Backend Scan') {
-            steps {
-                echo "Running Trivy container security scan..."
+    steps {
+        echo "Running Trivy container security scan..."
 
-                sh '''
-                    set -e
+        sh '''
+            set -e
 
-                    echo "Scanning backend Docker image..."
+            echo "Scanning backend Docker image..."
 
-                    docker run --rm \
-                        -v /var/run/docker.sock:/var/run/docker.sock \
-                        aquasec/trivy:latest \
-                        image \
-                        --scanners vuln \
-                        --severity HIGH,CRITICAL \
-                        --ignore-unfixed \
-                        --exit-code 1 \
-                        "$BACKEND_IMAGE"
+            docker run --rm \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                -v trivy-cache:/root/.cache/trivy \
+                aquasec/trivy:latest \
+                image \
+                --scanners vuln \
+                --severity HIGH,CRITICAL \
+                --ignore-unfixed \
+                --timeout 10m \
+                --exit-code 1 \
+                "$BACKEND_IMAGE"
 
-                    echo "Trivy: PASS"
-                '''
-            }
-        }
-
+            echo "Trivy: PASS"
+        '''
+    }
+}
 
         // ============================================================
         // 14. LOGIN TO AZURE ACR
