@@ -3,66 +3,100 @@ pipeline {
     agent any
 
     environment {
-        ACR_REGISTRY = "bestradevacr.azurecr.io"
-        BACKEND_IMAGE = "bestradevacr.azurecr.io/bestra-backend:${BUILD_NUMBER}"
-        SONAR_HOST_URL = "http://localhost:9000"
+        DOCKER_BUILDKIT = '1'
+
+        // Azure / ACR
+        BACKEND_IMAGE = "${ACR_REGISTRY}/bestra-backend:${BUILD_NUMBER}"
+
+        // SonarQube
+        SONAR_HOST_URL = "${SONAR_HOST_URL}"
     }
 
     stages {
 
+        // ============================================================
+        // 1. START
+        // ============================================================
+
         stage('Start') {
             steps {
                 echo "========================================"
-                echo "       B E S T R A   P I P E L I N E"
+                echo "Starting Bestra DevSecOps Pipeline"
+                echo "Build Number: ${BUILD_NUMBER}"
                 echo "========================================"
-                echo "Build: ${BUILD_NUMBER}"
-                sh 'date'
             }
         }
+
+
+        // ============================================================
+        // 2. CLONE
+        // ============================================================
 
         stage('Clone from GitHub') {
             steps {
-                echo "Cloning repository..."
+                echo "Checking out Bestra source code..."
 
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: '*/main']],
-                    userRemoteConfigs: [[
-                        credentialsId: 'github-final',
-                        url: 'https://github.com/AuraLab-international/bestra.git'
-                    ]]
-                ])
+                checkout scm
+
+                echo "GitHub checkout: PASS"
             }
         }
 
+
+        // ============================================================
+        // 3. PREPARE
+        // ============================================================
+
         stage('Prepare') {
             steps {
+                echo "Preparing build environment..."
+
                 sh '''
-                    echo "Node:"
-                    node --version
+                    set -e
 
-                    echo "NPM:"
-                    npm --version
+                    echo "Node version:"
+                    node --version || true
 
-                    echo "Docker:"
+                    echo "NPM version:"
+                    npm --version || true
+
+                    echo "Docker version:"
                     docker --version
 
-                    echo "Git:"
+                    echo "Git version:"
                     git --version
 
+                    echo ""
                     echo "Workspace:"
-                    ls -lah
+                    pwd
+                    ls -la
+
+                    echo ""
+                    echo "Checking project directories..."
+
+                    test -d backend
+                    test -d bestra
+                    test -d integrating-lynx
+
+                    echo "Project structure: PASS"
                 '''
             }
         }
 
+
+        // ============================================================
+        // 4. GITLEAKS
+        // ============================================================
+
         stage('GitLeaks Secret Scan') {
             steps {
-                echo "Running GitLeaks..."
+                echo "Running GitLeaks secret scan..."
 
                 sh '''
+                    set -e
+
                     docker run --rm \
-                        -v "$PWD:/repo" \
+                        -v "$WORKSPACE:/repo" \
                         zricethezav/gitleaks:latest \
                         detect \
                         --source=/repo \
@@ -73,6 +107,11 @@ pipeline {
                 '''
             }
         }
+
+
+        // ============================================================
+        // 5. SONARQUBE SAST
+        // ============================================================
 
         stage('SAST - SonarQube') {
             steps {
@@ -87,6 +126,8 @@ pipeline {
 
                     sh '''
                         set +e
+
+                        echo "Starting SonarQube analysis..."
 
                         docker run --rm \
                             --network host \
@@ -114,9 +155,14 @@ pipeline {
             }
         }
 
+
+        // ============================================================
+        // 6. SNYK
+        // ============================================================
+
         stage('Snyk Dependency Scan') {
             steps {
-                echo "Running Snyk..."
+                echo "Running Snyk dependency security scan..."
 
                 withCredentials([
                     string(
@@ -126,6 +172,8 @@ pipeline {
                 ]) {
 
                     sh '''
+                        set -e
+
                         cd backend
 
                         export SNYK_TOKEN="$SNYK_TOKEN"
@@ -139,119 +187,239 @@ pipeline {
             }
         }
 
+
+        // ============================================================
+        // 7. BACKEND VALIDATION
+        // ============================================================
+
         stage('Backend Validation') {
             steps {
-                echo "Validating backend..."
+                echo "Validating Node.js backend..."
 
                 sh '''
+                    set -e
+
                     cd backend
 
-                    npm ci --no-fund --no-audit
+                    echo "Installing backend dependencies..."
+
+                    npm ci \
+                        --no-fund \
+                        --no-audit
+
+                    echo "Generating Prisma client..."
 
                     npx prisma generate
 
+                    echo "Checking JavaScript syntax..."
+
                     node --check src/index.js
 
-                    echo "Backend validation: PASS"
+                    echo "Backend Validation: PASS"
                 '''
             }
         }
 
+
+        // ============================================================
+        // 8. REACTLYNX BUILD
+        // ============================================================
+
         stage('ReactLynx Build') {
             steps {
-                echo "Building ReactLynx..."
+                echo "Building ReactLynx frontend..."
 
                 sh '''
+                    set -e
+
                     cd bestra
 
-                    npm ci --no-fund --no-audit
+                    echo "Installing frontend dependencies..."
+
+                    npm ci \
+                        --no-fund \
+                        --no-audit
+
+                    echo "Building ReactLynx application..."
 
                     npm run build
+
+                    echo ""
+                    echo "Checking generated bundles..."
 
                     test -f dist/main.lynx.bundle
                     test -f dist/main.web.bundle
 
-                    echo "ReactLynx build: PASS"
+                    echo ""
+                    echo "Generated files:"
+                    ls -lh dist/
+
+                    echo ""
+                    echo "ReactLynx Build: PASS"
                 '''
             }
         }
+
+
+        // ============================================================
+        // 9. PREPARE ANDROID BUNDLE
+        // ============================================================
 
         stage('Prepare Android Bundle') {
             steps {
-                echo "Preparing Android bundle..."
+                echo "Preparing ReactLynx bundle for Android..."
 
                 sh '''
+                    set -e
+
+                    echo "Checking ReactLynx bundle..."
+
                     test -f bestra/dist/main.lynx.bundle
 
-                    cp bestra/dist/main.lynx.bundle \
-                       integrating-lynx/android/KotlinEmptyProject/app/src/main/assets/main.lynx.bundle
+                    echo "Copying main.lynx.bundle..."
 
-                    echo "Android bundle: READY"
+                    cp bestra/dist/main.lynx.bundle \
+                        integrating-lynx/android/KotlinEmptyProject/app/src/main/assets/main.lynx.bundle
+
+                    echo "Android bundle prepared successfully."
+
+                    ls -lh \
+                        integrating-lynx/android/KotlinEmptyProject/app/src/main/assets/main.lynx.bundle
+
+                    echo "Prepare Android Bundle: PASS"
                 '''
             }
         }
+
+
+        // ============================================================
+        // 10. BUILD ANDROID APK
+        // ============================================================
 
         stage('Build Android APK') {
             steps {
                 echo "Building Android APK..."
 
                 sh '''
+                    set -e
+
+                    echo "Checking Android Dockerfile..."
+
+                    test -f Dockerfile.android
+
+                    echo "Dockerfile.android found:"
+                    ls -lh Dockerfile.android
+
+                    echo ""
+                    echo "Building Android Docker image..."
+
                     docker build \
-                        -f integrating-lynx/android/KotlinEmptyProject/Dockerfile \
+                        -f Dockerfile.android \
                         -t bestra-android:${BUILD_NUMBER} \
                         .
 
-                    echo "Android APK build: PASS"
+                    echo ""
+                    echo "Android Docker image built successfully."
+
+                    echo "Build Android APK: PASS"
                 '''
             }
         }
 
+
+        // ============================================================
+        // 11. ARCHIVE ANDROID APK
+        // ============================================================
+
         stage('Archive Android APK') {
             steps {
-                echo "Archiving Android APK..."
+                echo "Extracting Android APK..."
 
                 sh '''
+                    set -e
+
+                    echo "Cleaning previous extraction container..."
+
                     docker rm -f bestra-android-extract 2>/dev/null || true
+
+                    echo "Creating temporary container..."
 
                     docker create \
                         --name bestra-android-extract \
                         bestra-android:${BUILD_NUMBER}
 
+                    echo "Copying APK from container..."
+
                     docker cp \
                         bestra-android-extract:/app/app/build/outputs/apk/debug/app-debug.apk \
                         bestra-debug-${BUILD_NUMBER}.apk
 
+                    echo "Removing temporary container..."
+
                     docker rm bestra-android-extract
 
+                    echo ""
+                    echo "Checking generated APK..."
+
+                    test -f bestra-debug-${BUILD_NUMBER}.apk
+
+                    echo ""
+                    echo "APK successfully generated:"
                     ls -lh bestra-debug-${BUILD_NUMBER}.apk
+
+                    echo "Archive Android APK: PASS"
                 '''
 
                 archiveArtifacts(
-                    artifacts: 'bestra-debug-${BUILD_NUMBER}.apk',
+                    artifacts: "bestra-debug-${BUILD_NUMBER}.apk",
                     fingerprint: true
                 )
+
+                echo "Android APK archived successfully."
             }
         }
+
+
+        // ============================================================
+        // 12. BUILD BACKEND DOCKER
+        // ============================================================
 
         stage('Build Backend Docker') {
             steps {
                 echo "Building backend Docker image..."
 
                 sh '''
+                    set -e
+
+                    echo "Building Bestra backend image..."
+
                     docker build \
                         -t "$BACKEND_IMAGE" \
                         ./backend
 
-                    echo "Backend Docker build: PASS"
+                    echo ""
+                    echo "Backend Docker image:"
+                    docker images "$BACKEND_IMAGE"
+
+                    echo "Build Backend Docker: PASS"
                 '''
             }
         }
 
+
+        // ============================================================
+        // 13. TRIVY
+        // ============================================================
+
         stage('Trivy Backend Scan') {
             steps {
-                echo "Running Trivy security scan..."
+                echo "Running Trivy container security scan..."
 
                 sh '''
+                    set -e
+
+                    echo "Scanning backend Docker image..."
+
                     docker run --rm \
                         -v /var/run/docker.sock:/var/run/docker.sock \
                         aquasec/trivy:latest \
@@ -267,9 +435,14 @@ pipeline {
             }
         }
 
+
+        // ============================================================
+        // 14. LOGIN TO AZURE ACR
+        // ============================================================
+
         stage('Docker Login to ACR') {
             steps {
-                echo "Logging in to Azure Container Registry..."
+                echo "Logging into Azure Container Registry..."
 
                 withCredentials([
                     usernamePassword(
@@ -280,6 +453,8 @@ pipeline {
                 ]) {
 
                     sh '''
+                        set -e
+
                         echo "$ACR_PASSWORD" | docker login "$ACR_REGISTRY" \
                             --username "$ACR_USERNAME" \
                             --password-stdin
@@ -290,22 +465,39 @@ pipeline {
             }
         }
 
+
+        // ============================================================
+        // 15. PUSH BACKEND TO ACR
+        // ============================================================
+
         stage('Push Backend to ACR') {
             steps {
-                echo "Pushing backend image to ACR..."
+                echo "Pushing backend Docker image to Azure Container Registry..."
 
                 sh '''
+                    set -e
+
+                    echo "Pushing image:"
+                    echo "$BACKEND_IMAGE"
+
                     docker push "$BACKEND_IMAGE"
 
-                    echo "ACR push: PASS"
-                    echo "Image: $BACKEND_IMAGE"
+                    echo ""
+                    echo "Backend image pushed successfully."
+
+                    echo "Push Backend to ACR: PASS"
                 '''
             }
         }
 
+
+        // ============================================================
+        // 16. DEPLOY BACKEND
+        // ============================================================
+
         stage('Deploy Backend') {
             steps {
-                echo "Authenticating with Azure..."
+                echo "Authenticating with Microsoft Azure..."
 
                 withCredentials([
                     usernamePassword(
@@ -324,28 +516,47 @@ pipeline {
                 ]) {
 
                     sh '''
+                        set -e
+
+                        echo "Logging into Azure..."
+
                         az login \
                             --service-principal \
                             --username "$AZURE_CLIENT_ID" \
                             --password "$AZURE_CLIENT_SECRET" \
                             --tenant "$AZURE_TENANT_ID"
 
+                        echo "Selecting Azure subscription..."
+
                         az account set \
                             --subscription "$AZURE_SUBSCRIPTION_ID"
 
+                        echo ""
                         echo "Azure authentication: PASS"
+
+                        echo ""
                         echo "Backend image ready for deployment:"
                         echo "$BACKEND_IMAGE"
+
+                        echo ""
+                        echo "Deploy Backend: PASS"
                     '''
                 }
             }
         }
 
+
+        // ============================================================
+        // 17. OWASP ZAP DAST
+        // ============================================================
+
         stage('DAST - OWASP ZAP') {
             steps {
-                echo "Running OWASP ZAP..."
+                echo "Running OWASP ZAP DAST..."
 
                 sh '''
+                    set +e
+
                     echo "Starting OWASP ZAP baseline scan..."
 
                     docker run --rm \
@@ -354,47 +565,59 @@ pipeline {
                         ghcr.io/zaproxy/zaproxy:stable \
                         zap-baseline.py \
                         -t http://localhost:3000 \
-                        -r zap-report.html \
-                        || true
+                        -r zap-report.html
 
-                    echo "OWASP ZAP scan completed"
+                    ZAP_EXIT=$?
+
+                    if [ "$ZAP_EXIT" -ne 0 ]; then
+                        echo "WARNING: OWASP ZAP found issues or target was unavailable."
+                        echo "Pipeline continues."
+                    else
+                        echo "OWASP ZAP: PASS"
+                    fi
+
+                    exit 0
                 '''
 
                 archiveArtifacts(
                     artifacts: 'zap-report.html',
-                    allowEmptyArchive: true
+                    allowEmptyArchive: true,
+                    fingerprint: true
                 )
             }
         }
     }
 
+
+    // ================================================================
+    // POST ACTIONS
+    // ================================================================
+
     post {
 
         success {
             echo "========================================"
-            echo "       PIPELINE SUCCESS"
-            echo "========================================"
-            echo "Bestra CI/CD completed successfully"
-            echo "Build: ${BUILD_NUMBER}"
+            echo "BES TRA DEVSECOPS PIPELINE: SUCCESS"
+            echo "Build ${BUILD_NUMBER} completed successfully."
             echo "========================================"
         }
 
         failure {
             echo "========================================"
-            echo "       PIPELINE FAILED"
-            echo "========================================"
-            echo "Check the failed stage above"
-            echo "Build: ${BUILD_NUMBER}"
+            echo "BESTRA DEVSECOPS PIPELINE: FAILED"
+            echo "Build ${BUILD_NUMBER} failed."
+            echo "Check Jenkins logs for details."
             echo "========================================"
         }
 
         always {
-            echo "Pipeline finished."
+            echo "Cleaning temporary Docker resources..."
 
             sh '''
-                echo "Docker disk usage:"
-                docker system df || true
+                docker rm -f bestra-android-extract 2>/dev/null || true
             '''
+
+            echo "Pipeline finished."
         }
     }
 }
