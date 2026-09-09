@@ -2,6 +2,11 @@ pipeline {
 
     agent any
 
+    options {
+        skipDefaultCheckout(true)
+        timestamps()
+    }
+
     environment {
 
         // Azure
@@ -12,24 +17,23 @@ pipeline {
         FRONTEND_APP = 'bestra-frontend'
 
         // Docker images
-        BACKEND_IMAGE = "${AZURE_ACR}/bestra-backend:${BUILD_NUMBER}"
+        BACKEND_IMAGE = "bestraacr.azurecr.io/bestra-backend:${BUILD_NUMBER}"
         FRONTEND_IMAGE = "bestra-frontend:${BUILD_NUMBER}"
 
-        // DockerHub
+        // Credentials
         DOCKERHUB_CREDENTIALS = 'dockerhub-creds'
-
-        // Azure credentials
         AZURE_CREDENTIALS = 'azure-service-principal'
-
-        // Snyk
         SNYK_CREDENTIALS = 'snyk-token'
     }
 
     stages {
 
-        // =========================================================
-        // 1 - CLONE
-        // =========================================================
+        stage('Start') {
+            steps {
+                echo 'Starting Bestra DevSecOps Pipeline'
+                echo "Build: ${BUILD_NUMBER}"
+            }
+        }
 
         stage('Clone from GitHub') {
             steps {
@@ -37,47 +41,29 @@ pipeline {
             }
         }
 
-
-        // =========================================================
-        // 2 - PREPARE
-        // =========================================================
-
         stage('Prepare') {
             steps {
                 sh '''
                     set -e
 
-                    echo "======================================"
-                    echo "Preparing Bestra CI/CD environment"
-                    echo "======================================"
+                    echo "Preparing environment..."
 
                     node --version
                     npm --version
                     docker --version
-                    java -version
+                    git --version
 
-                    echo "Workspace:"
-                    pwd
-
-                    echo "Project:"
-                    ls -la
+                    echo "Environment ready."
                 '''
             }
         }
-
-
-        // =========================================================
-        // 3 - GITLEAKS
-        // =========================================================
 
         stage('GitLeaks Secret Scan') {
             steps {
                 sh '''
                     set -e
 
-                    echo "======================================"
-                    echo "GitLeaks Secret Scan"
-                    echo "======================================"
+                    echo "Running GitLeaks..."
 
                     docker run --rm \
                         -v "$WORKSPACE:/repo" \
@@ -92,75 +78,50 @@ pipeline {
             }
         }
 
-
-        // =========================================================
-        // 4 - SAST SONARQUBE
-        // =========================================================
-
         stage('SAST - SonarQube') {
             steps {
                 script {
+                    if (env.SONAR_HOST_URL?.trim()) {
+                        sh '''
+                            set -e
 
-                    echo "======================================"
-                    echo "SAST - SonarQube"
-                    echo "======================================"
+                            echo "Running SonarQube SAST..."
 
-                    catchError(
-                        buildResult: 'SUCCESS',
-                        stageResult: 'UNSTABLE'
-                    ) {
-                        withSonarQubeEnv('SonarQube') {
+                            docker run --rm \
+                                -v "$WORKSPACE:/usr/src" \
+                                sonarsource/sonar-scanner-cli:latest \
+                                sonar-scanner \
+                                -Dsonar.projectKey=bestra \
+                                -Dsonar.sources=/usr/src/backend,/usr/src/bestra
 
-                            sh '''
-                                set -e
-
-                                if command -v sonar-scanner >/dev/null 2>&1; then
-
-                                    sonar-scanner \
-                                        -Dsonar.projectKey=bestra \
-                                        -Dsonar.projectName=Bestra \
-                                        -Dsonar.sources=backend,bestra
-
-                                else
-
-                                    echo "SonarScanner not installed."
-                                    echo "SonarQube stage skipped."
-
-                                fi
-                            '''
-                        }
+                            echo "SonarQube: PASS"
+                        '''
+                    } else {
+                        echo "SONAR_HOST_URL is not configured. SAST stage skipped."
                     }
                 }
             }
         }
 
-
-        // =========================================================
-        // 5 - SNYK
-        // =========================================================
-
         stage('Snyk Dependency Scan') {
             steps {
                 withCredentials([
                     string(
-                        credentialsId: "${SNYK_CREDENTIALS}",
+                        credentialsId: 'snyk-token',
                         variable: 'SNYK_TOKEN'
                     )
                 ]) {
-
                     sh '''
                         set -e
 
-                        echo "======================================"
-                        echo "Snyk Dependency Scan"
-                        echo "======================================"
+                        echo "Running Snyk Dependency Scan..."
 
                         cd backend
 
                         npm ci --no-fund --no-audit
 
-                        npx snyk test \
-                            --severity-threshold=high
+                        npx snyk auth "$SNYK_TOKEN"
+                        npx snyk test --severity-threshold=high
 
                         echo "Snyk: PASS"
                     '''
@@ -168,309 +129,225 @@ pipeline {
             }
         }
 
-
-        // =========================================================
-        // 6 - PARALLEL BUILD & SCAN
-        // =========================================================
-
         stage('Parallel Build & Scan') {
 
             parallel {
 
-                // -------------------------------------------------
-                // BACKEND
-                // -------------------------------------------------
-
                 stage('Backend Build + Trivy') {
+                    steps {
+                        sh '''
+                            set -e
 
-                    stages {
+                            echo "=============================="
+                            echo "BACKEND BUILD"
+                            echo "=============================="
 
-                        stage('Backend Validation') {
-                            steps {
-                                sh '''
-                                    set -e
+                            cd backend
 
-                                    echo "======================================"
-                                    echo "Backend Validation"
-                                    echo "======================================"
+                            npm ci --no-fund --no-audit
+                            npx prisma generate
+                            node --check src/index.js
 
-                                    cd backend
+                            cd ..
 
-                                    npm ci --no-fund --no-audit
+                            echo "Building backend Docker image..."
 
-                                    npx prisma generate
+                            docker build \
+                                -t "$BACKEND_IMAGE" \
+                                ./backend
 
-                                    node --check src/index.js
+                            echo "Running Trivy..."
 
-                                    echo "Backend Validation: PASS"
-                                '''
-                            }
-                        }
+                            docker run --rm \
+                                -v /var/run/docker.sock:/var/run/docker.sock \
+                                -v trivy-cache:/root/.cache/trivy \
+                                aquasec/trivy:latest \
+                                image \
+                                --scanners vuln \
+                                --severity HIGH,CRITICAL \
+                                --ignore-unfixed \
+                                --skip-dirs /usr/local/lib/node_modules/npm \
+                                --timeout 10m \
+                                --exit-code 1 \
+                                "$BACKEND_IMAGE"
 
-
-                        stage('Backend Docker Build') {
-                            steps {
-                                sh '''
-                                    set -e
-
-                                    echo "======================================"
-                                    echo "Backend Docker Build"
-                                    echo "======================================"
-
-                                    docker build \
-                                        -t "$BACKEND_IMAGE" \
-                                        ./backend
-
-                                    echo "Backend Docker Build: PASS"
-                                '''
-                            }
-                        }
-
-
-                        stage('Backend Trivy Scan') {
-                            steps {
-                                sh '''
-                                    set -e
-
-                                    echo "======================================"
-                                    echo "Backend Trivy Scan"
-                                    echo "======================================"
-
-                                    docker run --rm \
-                                        -v /var/run/docker.sock:/var/run/docker.sock \
-                                        -v trivy-cache:/root/.cache/trivy \
-                                        aquasec/trivy:latest \
-                                        image \
-                                        --scanners vuln \
-                                        --severity HIGH,CRITICAL \
-                                        --ignore-unfixed \
-                                        --skip-dirs /usr/local/lib/node_modules/npm \
-                                        --timeout 10m \
-                                        --exit-code 1 \
-                                        "$BACKEND_IMAGE"
-
-                                    echo "Backend Trivy: PASS"
-                                '''
-                            }
-                        }
+                            echo "Backend Build + Trivy: PASS"
+                        '''
                     }
                 }
 
-
-                // -------------------------------------------------
-                // FRONTEND
-                // -------------------------------------------------
-
                 stage('Frontend Build + Trivy') {
+                    steps {
+                        sh '''
+                            set -e
 
-                    stages {
+                            echo "=============================="
+                            echo "FRONTEND BUILD"
+                            echo "=============================="
 
-                        stage('ReactLynx Build') {
-                            steps {
-                                sh '''
-                                    set -e
+                            cd bestra
 
-                                    echo "======================================"
-                                    echo "ReactLynx Build"
-                                    echo "======================================"
+                            npm ci --no-fund --no-audit
 
-                                    cd bestra
+                            npm run build
 
-                                    npm ci --no-fund --no-audit
+                            test -f dist/main.lynx.bundle
+                            test -f dist/main.web.bundle
 
-                                    npm run build
+                            cd ..
 
-                                    test -f dist/main.lynx.bundle
-                                    test -f dist/main.web.bundle
+                            echo "Building frontend Docker image..."
 
-                                    echo "ReactLynx Build: PASS"
-                                '''
-                            }
-                        }
+                            docker build \
+                                -t "$FRONTEND_IMAGE" \
+                                ./bestra
 
+                            echo "Running Trivy..."
 
-                        stage('Frontend Docker Build') {
-                            steps {
-                                sh '''
-                                    set -e
+                            docker run --rm \
+                                -v /var/run/docker.sock:/var/run/docker.sock \
+                                -v trivy-cache:/root/.cache/trivy \
+                                aquasec/trivy:latest \
+                                image \
+                                --scanners vuln \
+                                --severity HIGH,CRITICAL \
+                                --ignore-unfixed \
+                                --timeout 10m \
+                                --exit-code 1 \
+                                "$FRONTEND_IMAGE"
 
-                                    echo "======================================"
-                                    echo "Frontend Docker Build"
-                                    echo "======================================"
-
-                                    docker build \
-                                        -t "$FRONTEND_IMAGE" \
-                                        ./bestra
-
-                                    echo "Frontend Docker Build: PASS"
-                                '''
-                            }
-                        }
-
-
-                        stage('Frontend Trivy Scan') {
-                            steps {
-                                sh '''
-                                    set -e
-
-                                    echo "======================================"
-                                    echo "Frontend Trivy Scan"
-                                    echo "======================================"
-
-                                    docker run --rm \
-                                        -v /var/run/docker.sock:/var/run/docker.sock \
-                                        -v trivy-cache:/root/.cache/trivy \
-                                        aquasec/trivy:latest \
-                                        image \
-                                        --scanners vuln \
-                                        --severity HIGH,CRITICAL \
-                                        --ignore-unfixed \
-                                        --timeout 10m \
-                                        --exit-code 1 \
-                                        "$FRONTEND_IMAGE"
-
-                                    echo "Frontend Trivy: PASS"
-                                '''
-                            }
-                        }
+                            echo "Frontend Build + Trivy: PASS"
+                        '''
                     }
                 }
             }
         }
-
-
-        // =========================================================
-        // 7 - ANDROID BUNDLE
-        // =========================================================
 
         stage('Prepare Android Bundle') {
             steps {
                 sh '''
                     set -e
 
-                    echo "======================================"
-                    echo "Prepare Android Bundle"
-                    echo "======================================"
+                    echo "Preparing Android bundle..."
 
                     test -f bestra/dist/main.lynx.bundle
 
-                    cp bestra/dist/main.lynx.bundle \
-                        integrating-lynx/android/KotlinEmptyProject/app/src/main/assets/
+                    ASSETS_DIR=$(find \
+                        integrating-lynx/android/KotlinEmptyProject \
+                        -type d \
+                        -path "*/src/main/assets" \
+                        -print -quit)
+
+                    if [ -z "$ASSETS_DIR" ]; then
+                        echo "Android assets directory not found."
+                        exit 1
+                    fi
+
+                    cp bestra/dist/main.lynx.bundle "$ASSETS_DIR/main.lynx.bundle"
 
                     echo "Android bundle prepared."
                 '''
             }
         }
 
-
-        // =========================================================
-        // 8 - BUILD ANDROID APK
-        // =========================================================
-
         stage('Build Android APK') {
             steps {
                 sh '''
                     set -e
 
-                    echo "======================================"
-                    echo "Build Android APK"
-                    echo "======================================"
+                    echo "Building Android APK..."
 
                     docker build \
                         -f Dockerfile.android \
                         -t bestra-android:${BUILD_NUMBER} \
                         .
 
-                    docker create \
-                        --name bestra-android-${BUILD_NUMBER} \
-                        bestra-android:${BUILD_NUMBER}
+                    mkdir -p android-output
+
+                    CONTAINER_ID=$(docker create bestra-android:${BUILD_NUMBER})
 
                     docker cp \
-                        bestra-android-${BUILD_NUMBER}:/app/app/build/outputs/apk/debug/app-debug.apk \
-                        ./bestra-${BUILD_NUMBER}.apk
+                        "$CONTAINER_ID:/app/integrating-lynx/android/KotlinEmptyProject/app/build/outputs/apk/debug/app-debug.apk" \
+                        android-output/bestra-debug.apk
 
-                    docker rm \
-                        bestra-android-${BUILD_NUMBER}
+                    docker rm "$CONTAINER_ID"
 
-                    test -f ./bestra-${BUILD_NUMBER}.apk
+                    test -f android-output/bestra-debug.apk
 
-                    echo "Android APK build: PASS"
+                    echo "Android APK built successfully."
                 '''
             }
         }
 
-
-        // =========================================================
-        // 9 - ARCHIVE APK
-        // =========================================================
-
         stage('Archive Android') {
             steps {
-                archiveArtifacts artifacts: 'bestra-*.apk',
-                                 fingerprint: true
-
-                echo "Android APK archived."
+                archiveArtifacts artifacts: 'android-output/bestra-debug.apk',
+                    fingerprint: true
             }
         }
-
-
-        // =========================================================
-        // 10 - LOGIN ACR
-        // =========================================================
 
         stage('Docker Login to ACR') {
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'azure-acr-credentials',
-                        usernameVariable: 'ACR_USERNAME',
-                        passwordVariable: 'ACR_PASSWORD'
+                        credentialsId: 'azure-service-principal',
+                        usernameVariable: 'AZURE_CLIENT_ID',
+                        passwordVariable: 'AZURE_CLIENT_SECRET'
+                    ),
+                    string(
+                        credentialsId: 'azure-tenant-id',
+                        variable: 'AZURE_TENANT'
+                    ),
+                    string(
+                        credentialsId: 'azure-subscription-id',
+                        variable: 'AZURE_SUBSCRIPTION'
                     )
                 ]) {
-
                     sh '''
                         set -e
 
-                        echo "======================================"
-                        echo "Docker Login to Azure ACR"
-                        echo "======================================"
+                        echo "Login to Azure..."
 
-                        echo "$ACR_PASSWORD" | docker login \
-                            "$AZURE_ACR" \
-                            -u "$ACR_USERNAME" \
-                            --password-stdin
+                        az login \
+                            --service-principal \
+                            -u "$AZURE_CLIENT_ID" \
+                            -p "$AZURE_CLIENT_SECRET" \
+                            --tenant "$AZURE_TENANT"
 
-                        echo "ACR Login: PASS"
+                        az account set \
+                            --subscription "$AZURE_SUBSCRIPTION"
+
+                        echo "Login to ACR..."
+
+                        az acr login \
+                            --name bestraacr
+
+                        echo "ACR login: PASS"
                     '''
                 }
             }
         }
-
-
-        // =========================================================
-        // 11 - PUSH BACKEND ACR
-        // =========================================================
 
         stage('Push Backend to ACR') {
             steps {
                 sh '''
                     set -e
 
-                    echo "======================================"
-                    echo "Push Backend to ACR"
-                    echo "======================================"
+                    echo "Pushing backend to Azure Container Registry..."
 
                     docker push "$BACKEND_IMAGE"
+
+                    docker tag \
+                        "$BACKEND_IMAGE" \
+                        "$AZURE_ACR/bestra-backend:latest"
+
+                    docker push \
+                        "$AZURE_ACR/bestra-backend:latest"
 
                     echo "Backend pushed to ACR."
                 '''
             }
         }
-
-
-        // =========================================================
-        // 12 - LOGIN DOCKERHUB
-        // =========================================================
 
         stage('Docker Login to DockerHub') {
             steps {
@@ -481,28 +358,18 @@ pipeline {
                         passwordVariable: 'DOCKERHUB_PASSWORD'
                     )
                 ]) {
-
                     sh '''
                         set -e
-
-                        echo "======================================"
-                        echo "Docker Login to DockerHub"
-                        echo "======================================"
 
                         echo "$DOCKERHUB_PASSWORD" | docker login \
                             -u "$DOCKERHUB_USERNAME" \
                             --password-stdin
 
-                        echo "DockerHub Login: PASS"
+                        echo "DockerHub login: PASS"
                     '''
                 }
             }
         }
-
-
-        // =========================================================
-        // 13 - PUSH FRONTEND DOCKERHUB
-        // =========================================================
 
         stage('Push Frontend to DockerHub') {
             steps {
@@ -513,33 +380,30 @@ pipeline {
                         passwordVariable: 'DOCKERHUB_PASSWORD'
                     )
                 ]) {
-
                     sh '''
                         set -e
 
-                        echo "======================================"
-                        echo "Push Frontend to DockerHub"
-                        echo "======================================"
-
-                        FULL_FRONTEND_IMAGE="$DOCKERHUB_USERNAME/bestra-frontend:${BUILD_NUMBER}"
+                        FRONTEND_DOCKERHUB_IMAGE="$DOCKERHUB_USERNAME/bestra-frontend:${BUILD_NUMBER}"
 
                         docker tag \
                             "$FRONTEND_IMAGE" \
-                            "$FULL_FRONTEND_IMAGE"
+                            "$FRONTEND_DOCKERHUB_IMAGE"
 
-                        docker push "$FULL_FRONTEND_IMAGE"
+                        docker push \
+                            "$FRONTEND_DOCKERHUB_IMAGE"
 
-                        echo "Frontend pushed to DockerHub:"
-                        echo "$FULL_FRONTEND_IMAGE"
+                        docker tag \
+                            "$FRONTEND_IMAGE" \
+                            "$DOCKERHUB_USERNAME/bestra-frontend:latest"
+
+                        docker push \
+                            "$DOCKERHUB_USERNAME/bestra-frontend:latest"
+
+                        echo "Frontend pushed to DockerHub."
                     '''
                 }
             }
         }
-
-
-        // =========================================================
-        // 14 - DEPLOY BACKEND
-        // =========================================================
 
         stage('Deploy Backend') {
             steps {
@@ -551,50 +415,42 @@ pipeline {
                     ),
                     string(
                         credentialsId: 'azure-tenant-id',
-                        variable: 'AZURE_TENANT_ID'
+                        variable: 'AZURE_TENANT'
                     ),
                     string(
                         credentialsId: 'azure-subscription-id',
-                        variable: 'AZURE_SUBSCRIPTION_ID'
+                        variable: 'AZURE_SUBSCRIPTION'
                     )
                 ]) {
-
                     sh '''
                         set -e
 
-                        echo "======================================"
-                        echo "Deploy Backend to Azure"
-                        echo "======================================"
+                        echo "Deploying backend to Azure WebApp..."
 
                         az login \
                             --service-principal \
                             -u "$AZURE_CLIENT_ID" \
                             -p "$AZURE_CLIENT_SECRET" \
-                            --tenant "$AZURE_TENANT_ID"
+                            --tenant "$AZURE_TENANT"
 
                         az account set \
-                            --subscription "$AZURE_SUBSCRIPTION_ID"
+                            --subscription "$AZURE_SUBSCRIPTION"
 
                         az webapp config container set \
                             --resource-group "$RESOURCE_GROUP" \
                             --name "$BACKEND_APP" \
-                            --container-image-name "$BACKEND_IMAGE" \
-                            --container-registry-url "https://$AZURE_ACR"
+                            --docker-custom-image-name "$BACKEND_IMAGE" \
+                            --docker-registry-server-url "https://$AZURE_ACR"
 
                         az webapp restart \
                             --resource-group "$RESOURCE_GROUP" \
                             --name "$BACKEND_APP"
 
-                        echo "Backend deployment: PASS"
+                        echo "Backend deployment completed."
                     '''
                 }
             }
         }
-
-
-        // =========================================================
-        // 15 - DEPLOY FRONTEND WEBAPP
-        // =========================================================
 
         stage('Deploy Frontend WebApp') {
             steps {
@@ -603,107 +459,96 @@ pipeline {
                         credentialsId: 'dockerhub-creds',
                         usernameVariable: 'DOCKERHUB_USERNAME',
                         passwordVariable: 'DOCKERHUB_PASSWORD'
+                    ),
+                    usernamePassword(
+                        credentialsId: 'azure-service-principal',
+                        usernameVariable: 'AZURE_CLIENT_ID',
+                        passwordVariable: 'AZURE_CLIENT_SECRET'
+                    ),
+                    string(
+                        credentialsId: 'azure-tenant-id',
+                        variable: 'AZURE_TENANT'
+                    ),
+                    string(
+                        credentialsId: 'azure-subscription-id',
+                        variable: 'AZURE_SUBSCRIPTION'
                     )
                 ]) {
-
                     sh '''
                         set -e
 
-                        echo "======================================"
-                        echo "Deploy Frontend WebApp"
-                        echo "======================================"
+                        FRONTEND_DOCKERHUB_IMAGE="$DOCKERHUB_USERNAME/bestra-frontend:${BUILD_NUMBER}"
 
-                        FULL_FRONTEND_IMAGE="$DOCKERHUB_USERNAME/bestra-frontend:${BUILD_NUMBER}"
+                        echo "Deploying frontend to Azure WebApp..."
+
+                        az login \
+                            --service-principal \
+                            -u "$AZURE_CLIENT_ID" \
+                            -p "$AZURE_CLIENT_SECRET" \
+                            --tenant "$AZURE_TENANT"
+
+                        az account set \
+                            --subscription "$AZURE_SUBSCRIPTION"
 
                         az webapp config container set \
                             --resource-group "$RESOURCE_GROUP" \
                             --name "$FRONTEND_APP" \
-                            --container-image-name "$FULL_FRONTEND_IMAGE" \
-                            --container-registry-url "https://index.docker.io"
+                            --docker-custom-image-name "$FRONTEND_DOCKERHUB_IMAGE" \
+                            --docker-registry-server-url "https://index.docker.io/v1/" \
+                            --docker-registry-server-user "$DOCKERHUB_USERNAME" \
+                            --docker-registry-server-password "$DOCKERHUB_PASSWORD"
 
                         az webapp restart \
                             --resource-group "$RESOURCE_GROUP" \
                             --name "$FRONTEND_APP"
 
-                        echo "Frontend WebApp deployment: PASS"
+                        echo "Frontend deployment completed."
                     '''
                 }
             }
         }
-
-
-        // =========================================================
-        // 16 - DAST OWASP ZAP
-        // =========================================================
 
         stage('DAST - OWASP ZAP') {
             steps {
                 sh '''
                     set -e
 
-                    echo "======================================"
-                    echo "DAST - OWASP ZAP"
-                    echo "======================================"
+                    echo "Running OWASP ZAP..."
 
                     docker run --rm \
-                        -t \
-                        owasp/zap2docker-stable \
+                        -t owasp/zap2docker-stable \
                         zap-baseline.py \
-                        -t "https://${BACKEND_APP}.azurewebsites.net/health" \
+                        -t "https://$BACKEND_APP.azurewebsites.net/health" \
                         -r zap-report.html \
                         || true
 
-                    echo "OWASP ZAP scan completed."
+                    echo "OWASP ZAP completed."
                 '''
             }
         }
 
-
-        // =========================================================
-        // 17 - END
-        // =========================================================
-
         stage('End') {
             steps {
-                echo "======================================"
-                echo "Pipeline finished."
-                echo "======================================"
+                echo '========================================'
+                echo 'Bestra DevSecOps Pipeline finished.'
+                echo "Build: ${BUILD_NUMBER}"
+                echo '========================================'
             }
         }
     }
 
-
-    // =============================================================
-    // POST
-    // =============================================================
-
     post {
 
         success {
-            echo '''
-========================================
-        B E S T R A
-     PIPELINE SUCCESS
-========================================
-'''
+            echo 'PIPELINE SUCCESS'
         }
 
         failure {
-            echo '''
-========================================
-        B E S T R A
-     PIPELINE FAILED
-========================================
-'''
+            echo 'PIPELINE FAILED'
         }
 
         always {
-            sh '''
-                docker logout "$AZURE_ACR" || true
-                docker logout || true
-            '''
-
-            echo "Jenkins pipeline finished."
+            echo 'Pipeline finished.'
         }
     }
 }
