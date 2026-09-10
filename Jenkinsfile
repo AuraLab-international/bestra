@@ -134,7 +134,7 @@ pipeline {
 
         stage('Backend Build + Trivy') {
             steps {
-                ws("${env.WORKSPACE}@backend") {
+
                     dir('backend') {
 
                         echo "=== Backend Validation ==="
@@ -175,12 +175,12 @@ pipeline {
                         echo "Backend Build + Trivy: PASS"
                     }
                 }
-            }
+
         }
 
         stage('Frontend Build + Trivy') {
             steps {
-                ws("${env.WORKSPACE}@frontend") {
+
                     dir('bestra') {
 
                         echo "=== Frontend Build ==="
@@ -221,7 +221,7 @@ pipeline {
                         echo "Frontend Build + Trivy: PASS"
                     }
                 }
-            }
+
         }
     }
 }
