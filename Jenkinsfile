@@ -150,7 +150,7 @@ pipeline {
 
                         sh '''
                             set -e
-                            docker build -t "$BACKEND_IMAGE" .
+                            docker build --pull -t "$BACKEND_IMAGE" .
                         '''
 
                         echo "Backend Docker Build: PASS"
@@ -195,7 +195,7 @@ pipeline {
 
                         sh '''
                             set -e
-                            docker build \
+                            docker build --pull \
                                 --build-arg PUBLIC_SERVER_IP="$PUBLIC_SERVER_IP" \
                                 -t "$FRONTEND_IMAGE" .
                         '''
@@ -254,33 +254,38 @@ pipeline {
         }
 
         stage('Build Android APK') {
-            steps {
-                sh '''
-                    set -e
+    steps {
+        sh '''
+            docker build -f Dockerfile.android -t bestra-android:${BUILD_NUMBER} .
 
-                    echo "Building Android APK..."
+            mkdir -p android-output
 
-                    docker build \
-                        -f Dockerfile.android \
-                        -t bestra-android:${BUILD_NUMBER} \
-                        .
+            CONTAINER_ID=$(docker create bestra-android:${BUILD_NUMBER})
 
-                    mkdir -p android-output
+            echo "Recherche de l'APK dans le container..."
 
-                    CONTAINER_ID=$(docker create bestra-android:${BUILD_NUMBER})
+            APK_PATH=$(docker exec "$CONTAINER_ID" sh -c \
+                'find /app -type f -name "app-debug.apk" | head -n 1')
 
-                    docker cp \
-                        "$CONTAINER_ID:/app/integrating-lynx/android/KotlinEmptyProject/app/build/outputs/apk/debug/app-debug.apk" \
-                        android-output/bestra-debug.apk
+            if [ -z "$APK_PATH" ]; then
+                echo "ERREUR: APK introuvable"
+                docker rm "$CONTAINER_ID"
+                exit 1
+            fi
 
-                    docker rm "$CONTAINER_ID"
+            echo "APK trouvé: $APK_PATH"
 
-                    test -f android-output/bestra-debug.apk
+            docker cp "$CONTAINER_ID:$APK_PATH" \
+                android-output/bestra-debug.apk
 
-                    echo "Android APK built successfully."
-                '''
-            }
-        }
+            docker rm "$CONTAINER_ID"
+
+            ls -lh android-output/bestra-debug.apk
+        '''
+    }
+}
+
+                  
 
         stage('Archive Android') {
             steps {
