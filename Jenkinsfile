@@ -9,18 +9,15 @@ pipeline {
 
     environment {
 
-        // Azure
         AZURE_ACR = 'bestraacr.azurecr.io'
         RESOURCE_GROUP = 'bestra-rg'
 
         BACKEND_APP = 'bestra-backend'
         FRONTEND_APP = 'bestra-frontend'
 
-        // Docker images
         BACKEND_IMAGE = "bestraacr.azurecr.io/bestra-backend:${BUILD_NUMBER}"
         FRONTEND_IMAGE = "bestra-frontend:${BUILD_NUMBER}"
 
-        // Credentials
         DOCKERHUB_CREDENTIALS = 'dockerhub-creds'
         AZURE_CREDENTIALS = 'azure-service-principal'
         SNYK_CREDENTIALS = 'snyk-token'
@@ -130,103 +127,104 @@ pipeline {
         }
 
         stage('Parallel Build & Scan') {
-    parallel {
+            parallel {
 
-        stage('Backend Build + Trivy') {
-            steps {
+                stage('Backend Build + Trivy') {
+                    steps {
+                        dir('backend') {
 
-                    dir('backend') {
+                            echo "=== Backend Validation ==="
 
-                        echo "=== Backend Validation ==="
+                            sh '''
+                                set -e
 
-                        sh '''
-                            set -e
-                            npm ci --no-fund --no-audit
-                            npx prisma generate
-                            node --check src/index.js
-                        '''
+                                npm ci --no-fund --no-audit
+                                npx prisma generate
+                                node --check src/index.js
+                            '''
 
-                        echo "Backend validation: PASS"
+                            echo "Backend validation: PASS"
 
-                        sh '''
-                            set -e
-                            docker build --pull -t "$BACKEND_IMAGE" .
-                        '''
+                            sh '''
+                                set -e
 
-                        echo "Backend Docker Build: PASS"
+                                docker build --pull \
+                                    -t "$BACKEND_IMAGE" .
+                            '''
 
-                        sh '''
-                            set -e
+                            echo "Backend Docker Build: PASS"
 
-                            docker run --rm \
-                                -v /var/run/docker.sock:/var/run/docker.sock \
-                                -v trivy-cache:/root/.cache/trivy \
-                                aquasec/trivy:latest \
-                                image \
-                                --scanners vuln \
-                                --severity HIGH,CRITICAL \
-                                --ignore-unfixed \
-                                --skip-dirs /usr/local/lib/node_modules/npm \
-                                --timeout 10m \
-                                --exit-code 1 \
-                                "$BACKEND_IMAGE"
-                        '''
+                            sh '''
+                                set -e
 
-                        echo "Backend Build + Trivy: PASS"
+                                docker run --rm \
+                                    -v /var/run/docker.sock:/var/run/docker.sock \
+                                    -v trivy-cache:/root/.cache/trivy \
+                                    aquasec/trivy:latest \
+                                    image \
+                                    --scanners vuln \
+                                    --severity HIGH,CRITICAL \
+                                    --ignore-unfixed \
+                                    --skip-dirs /usr/local/lib/node_modules/npm \
+                                    --timeout 10m \
+                                    --exit-code 1 \
+                                    "$BACKEND_IMAGE"
+                            '''
+
+                            echo "Backend Build + Trivy: PASS"
+                        }
                     }
                 }
 
-        }
+                stage('Frontend Build + Trivy') {
+                    steps {
+                        dir('bestra') {
 
-        stage('Frontend Build + Trivy') {
-            steps {
+                            echo "=== Frontend Build ==="
 
-                    dir('bestra') {
+                            sh '''
+                                set -e
 
-                        echo "=== Frontend Build ==="
+                                npm ci
+                                npm run build
+                            '''
 
-                        sh '''
-                            set -e
-                            npm ci
-                            npm run build
-                        '''
+                            echo "ReactLynx Build: PASS"
 
-                        echo "ReactLynx Build: PASS"
+                            sh '''
+                                set -e
 
-                        sh '''
-                            set -e
-                            docker build --pull \
-                                --build-arg PUBLIC_SERVER_IP="$PUBLIC_SERVER_IP" \
-                                -t "$FRONTEND_IMAGE" .
-                        '''
+                                docker build --pull \
+                                    --build-arg PUBLIC_SERVER_IP="$PUBLIC_SERVER_IP" \
+                                    -t "$FRONTEND_IMAGE" .
+                            '''
 
-                        echo "Frontend Docker Build: PASS"
+                            echo "Frontend Docker Build: PASS"
 
-                        sh '''
-                            set -e
+                            sh '''
+                                set -e
 
-                            docker run --rm \
-                                -v /var/run/docker.sock:/var/run/docker.sock \
-                                -v trivy-cache:/root/.cache/trivy \
-                                aquasec/trivy:latest \
-                                image \
-                                --scanners vuln \
-                                --severity HIGH,CRITICAL \
-                                --ignore-unfixed \
-                                --timeout 10m \
-                                --exit-code 1 \
-                                "$FRONTEND_IMAGE"
-                        '''
+                                docker run --rm \
+                                    -v /var/run/docker.sock:/var/run/docker.sock \
+                                    -v trivy-cache:/root/.cache/trivy \
+                                    aquasec/trivy:latest \
+                                    image \
+                                    --scanners vuln \
+                                    --severity HIGH,CRITICAL \
+                                    --ignore-unfixed \
+                                    --timeout 10m \
+                                    --exit-code 1 \
+                                    "$FRONTEND_IMAGE"
+                            '''
 
-                        echo "Frontend Build + Trivy: PASS"
+                            echo "Frontend Build + Trivy: PASS"
+                        }
                     }
                 }
-
+            }
         }
-    }
-}
 
-       stage('Prepare Android Bundle') {
+        stage('Prepare Android Bundle') {
             steps {
                 sh '''
                     set -e
@@ -246,7 +244,8 @@ pipeline {
                         exit 1
                     fi
 
-                    cp bestra/dist/main.lynx.bundle "$ASSETS_DIR/main.lynx.bundle"
+                    cp bestra/dist/main.lynx.bundle \
+                        "$ASSETS_DIR/main.lynx.bundle"
 
                     echo "Android bundle prepared."
                 '''
@@ -254,38 +253,33 @@ pipeline {
         }
 
         stage('Build Android APK') {
-    steps {
-        sh '''
-            docker build -f Dockerfile.android -t bestra-android:${BUILD_NUMBER} .
+            steps {
+                sh '''
+                    set -e
 
-            mkdir -p android-output
+                    echo "Building Android APK..."
 
-            CONTAINER_ID=$(docker create bestra-android:${BUILD_NUMBER})
+                    docker build \
+                        -f Dockerfile.android \
+                        -t bestra-android:${BUILD_NUMBER} .
 
-            echo "Recherche de l'APK dans le container..."
+                    mkdir -p android-output
 
-            APK_PATH=$(docker exec "$CONTAINER_ID" sh -c \
-                'find /app -type f -name "app-debug.apk" | head -n 1')
+                    CONTAINER_ID=$(docker create bestra-android:${BUILD_NUMBER})
 
-            if [ -z "$APK_PATH" ]; then
-                echo "ERREUR: APK introuvable"
-                docker rm "$CONTAINER_ID"
-                exit 1
-            fi
+                    echo "Copying APK from container..."
 
-            echo "APK trouvé: $APK_PATH"
+                    docker cp \
+                        "$CONTAINER_ID:/app/app/build/outputs/apk/debug/app-debug.apk" \
+                        android-output/bestra-debug.apk
 
-            docker cp "$CONTAINER_ID:$APK_PATH" \
-                android-output/bestra-debug.apk
+                    docker rm "$CONTAINER_ID"
 
-            docker rm "$CONTAINER_ID"
-
-            ls -lh android-output/bestra-debug.apk
-        '''
-    }
-}
-
-                  
+                    echo "APK successfully extracted:"
+                    ls -lh android-output/bestra-debug.apk
+                '''
+            }
+        }
 
         stage('Archive Android') {
             steps {
