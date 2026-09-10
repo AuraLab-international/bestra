@@ -130,33 +130,33 @@ pipeline {
         }
 
         stage('Parallel Build & Scan') {
+    parallel {
 
-            parallel {
+        stage('Backend Build + Trivy') {
+            steps {
+                ws("${env.WORKSPACE}@backend") {
+                    dir('backend') {
 
-                stage('Backend Build + Trivy') {
-                    steps {
+                        echo "=== Backend Validation ==="
+
                         sh '''
                             set -e
-
-                            echo "=============================="
-                            echo "BACKEND BUILD"
-                            echo "=============================="
-
-                            cd backend
-
                             npm ci --no-fund --no-audit
                             npx prisma generate
                             node --check src/index.js
+                        '''
 
-                            cd ..
+                        echo "Backend validation: PASS"
 
-                            echo "Building backend Docker image..."
+                        sh '''
+                            set -e
+                            docker build -t "$BACKEND_IMAGE" .
+                        '''
 
-                            docker build \
-                                -t "$BACKEND_IMAGE" \
-                                ./backend
+                        echo "Backend Docker Build: PASS"
 
-                            echo "Running Trivy..."
+                        sh '''
+                            set -e
 
                             docker run --rm \
                                 -v /var/run/docker.sock:/var/run/docker.sock \
@@ -170,39 +170,40 @@ pipeline {
                                 --timeout 10m \
                                 --exit-code 1 \
                                 "$BACKEND_IMAGE"
-
-                            echo "Backend Build + Trivy: PASS"
                         '''
+
+                        echo "Backend Build + Trivy: PASS"
                     }
                 }
+            }
+        }
 
-                stage('Frontend Build + Trivy') {
-                    steps {
+        stage('Frontend Build + Trivy') {
+            steps {
+                ws("${env.WORKSPACE}@frontend") {
+                    dir('bestra') {
+
+                        echo "=== Frontend Build ==="
+
                         sh '''
                             set -e
-
-                            echo "=============================="
-                            echo "FRONTEND BUILD"
-                            echo "=============================="
-
-                            cd bestra
-
-                            npm ci --no-fund --no-audit
-
+                            npm ci
                             npm run build
+                        '''
 
-                            test -f dist/main.lynx.bundle
-                            test -f dist/main.web.bundle
+                        echo "ReactLynx Build: PASS"
 
-                            cd ..
-
-                            echo "Building frontend Docker image..."
-
+                        sh '''
+                            set -e
                             docker build \
-                                -t "$FRONTEND_IMAGE" \
-                                ./bestra
+                                --build-arg PUBLIC_SERVER_IP="$PUBLIC_SERVER_IP" \
+                                -t "$FRONTEND_IMAGE" .
+                        '''
 
-                            echo "Running Trivy..."
+                        echo "Frontend Docker Build: PASS"
+
+                        sh '''
+                            set -e
 
                             docker run --rm \
                                 -v /var/run/docker.sock:/var/run/docker.sock \
@@ -215,15 +216,17 @@ pipeline {
                                 --timeout 10m \
                                 --exit-code 1 \
                                 "$FRONTEND_IMAGE"
-
-                            echo "Frontend Build + Trivy: PASS"
                         '''
+
+                        echo "Frontend Build + Trivy: PASS"
                     }
                 }
             }
         }
+    }
+}
 
-        stage('Prepare Android Bundle') {
+       stage('Prepare Android Bundle') {
             steps {
                 sh '''
                     set -e
