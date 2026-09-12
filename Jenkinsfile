@@ -12,6 +12,9 @@ pipeline {
         AZURE_ACR = 'bestraacr.azurecr.io'
         RESOURCE_GROUP = 'bestra-rg'
 
+        AKS_NAME = 'bestra-aks'
+        AKS_NAMESPACE = 'bestra'
+
         BACKEND_APP = 'bestra-backend'
         FRONTEND_APP = 'bestra-frontend'
 
@@ -32,11 +35,13 @@ pipeline {
             }
         }
 
+
         stage('Clone from GitHub') {
             steps {
                 checkout scm
             }
         }
+
 
         stage('Prepare') {
             steps {
@@ -49,11 +54,14 @@ pipeline {
                     npm --version
                     docker --version
                     git --version
+                    kubectl version --client
+                    az version
 
                     echo "Environment ready."
                 '''
             }
         }
+
 
         stage('GitLeaks Secret Scan') {
             steps {
@@ -75,10 +83,13 @@ pipeline {
             }
         }
 
+
         stage('SAST - SonarQube') {
             steps {
                 script {
+
                     if (env.SONAR_HOST_URL?.trim()) {
+
                         sh '''
                             set -e
 
@@ -93,21 +104,26 @@ pipeline {
 
                             echo "SonarQube: PASS"
                         '''
+
                     } else {
+
                         echo "SONAR_HOST_URL is not configured. SAST stage skipped."
                     }
                 }
             }
         }
 
+
         stage('Snyk Dependency Scan') {
             steps {
+
                 withCredentials([
                     string(
                         credentialsId: 'snyk-token',
                         variable: 'SNYK_TOKEN'
                     )
                 ]) {
+
                     sh '''
                         set -e
 
@@ -118,7 +134,9 @@ pipeline {
                         npm ci --no-fund --no-audit
 
                         npx snyk auth "$SNYK_TOKEN"
-                        npx snyk test --severity-threshold=high
+
+                        npx snyk test \
+                            --severity-threshold=high
 
                         echo "Snyk: PASS"
                     '''
@@ -126,11 +144,15 @@ pipeline {
             }
         }
 
+
         stage('Parallel Build & Scan') {
+
             parallel {
 
                 stage('Backend Build + Trivy') {
+
                     steps {
+
                         dir('backend') {
 
                             echo "=== Backend Validation ==="
@@ -139,11 +161,14 @@ pipeline {
                                 set -e
 
                                 npm ci --no-fund --no-audit
+
                                 npx prisma generate
+
                                 node --check src/index.js
                             '''
 
                             echo "Backend validation: PASS"
+
 
                             sh '''
                                 set -e
@@ -153,6 +178,7 @@ pipeline {
                             '''
 
                             echo "Backend Docker Build: PASS"
+
 
                             sh '''
                                 set -e
@@ -176,8 +202,11 @@ pipeline {
                     }
                 }
 
+
                 stage('Frontend Build + Trivy') {
+
                     steps {
+
                         dir('bestra') {
 
                             echo "=== Frontend Build ==="
@@ -186,10 +215,12 @@ pipeline {
                                 set -e
 
                                 npm ci
+
                                 npm run build
                             '''
 
                             echo "ReactLynx Build: PASS"
+
 
                             sh '''
                                 set -e
@@ -200,6 +231,7 @@ pipeline {
                             '''
 
                             echo "Frontend Docker Build: PASS"
+
 
                             sh '''
                                 set -e
@@ -224,8 +256,11 @@ pipeline {
             }
         }
 
+
         stage('Prepare Android Bundle') {
+
             steps {
+
                 sh '''
                     set -e
 
@@ -252,8 +287,11 @@ pipeline {
             }
         }
 
+
         stage('Build Android APK') {
+
             steps {
+
                 sh '''
                     set -e
 
@@ -265,7 +303,8 @@ pipeline {
 
                     mkdir -p android-output
 
-                    CONTAINER_ID=$(docker create bestra-android:${BUILD_NUMBER})
+                    CONTAINER_ID=$(docker create \
+                        bestra-android:${BUILD_NUMBER})
 
                     echo "Copying APK from container..."
 
@@ -276,35 +315,48 @@ pipeline {
                     docker rm "$CONTAINER_ID"
 
                     echo "APK successfully extracted:"
+
                     ls -lh android-output/bestra-debug.apk
                 '''
             }
         }
 
+
         stage('Archive Android') {
+
             steps {
-                archiveArtifacts artifacts: 'android-output/bestra-debug.apk',
+
+                archiveArtifacts \
+                    artifacts: 'android-output/bestra-debug.apk',
                     fingerprint: true
             }
         }
 
+
         stage('Docker Login to ACR') {
+
             steps {
+
                 withCredentials([
+
                     usernamePassword(
                         credentialsId: 'azure-service-principal',
                         usernameVariable: 'AZURE_CLIENT_ID',
                         passwordVariable: 'AZURE_CLIENT_SECRET'
                     ),
+
                     string(
                         credentialsId: 'azure-tenant-id',
                         variable: 'AZURE_TENANT'
                     ),
+
                     string(
                         credentialsId: 'azure-subscription-id',
                         variable: 'AZURE_SUBSCRIPTION'
                     )
+
                 ]) {
+
                     sh '''
                         set -e
 
@@ -314,7 +366,8 @@ pipeline {
                             --service-principal \
                             -u "$AZURE_CLIENT_ID" \
                             -p "$AZURE_CLIENT_SECRET" \
-                            --tenant "$AZURE_TENANT"
+                            --tenant "$AZURE_TENANT" \
+                            --output none
 
                         az account set \
                             --subscription "$AZURE_SUBSCRIPTION"
@@ -330,8 +383,11 @@ pipeline {
             }
         }
 
+
         stage('Push Backend to ACR') {
+
             steps {
+
                 sh '''
                     set -e
 
@@ -351,15 +407,21 @@ pipeline {
             }
         }
 
+
         stage('Docker Login to DockerHub') {
+
             steps {
+
                 withCredentials([
+
                     usernamePassword(
                         credentialsId: 'dockerhub-creds',
                         usernameVariable: 'DOCKERHUB_USERNAME',
                         passwordVariable: 'DOCKERHUB_PASSWORD'
                     )
+
                 ]) {
+
                     sh '''
                         set -e
 
@@ -373,15 +435,21 @@ pipeline {
             }
         }
 
+
         stage('Push Frontend to DockerHub') {
+
             steps {
+
                 withCredentials([
+
                     usernamePassword(
                         credentialsId: 'dockerhub-creds',
                         usernameVariable: 'DOCKERHUB_USERNAME',
                         passwordVariable: 'DOCKERHUB_PASSWORD'
                     )
+
                 ]) {
+
                     sh '''
                         set -e
 
@@ -407,120 +475,245 @@ pipeline {
             }
         }
 
-        stage('Deploy Backend') {
+
+        stage('Deploy Backend to AKS') {
+
             steps {
+
                 withCredentials([
+
                     usernamePassword(
                         credentialsId: 'azure-service-principal',
                         usernameVariable: 'AZURE_CLIENT_ID',
                         passwordVariable: 'AZURE_CLIENT_SECRET'
                     ),
+
                     string(
                         credentialsId: 'azure-tenant-id',
                         variable: 'AZURE_TENANT'
                     ),
+
                     string(
                         credentialsId: 'azure-subscription-id',
                         variable: 'AZURE_SUBSCRIPTION'
                     )
+
                 ]) {
+
                     sh '''
                         set -e
 
-                        echo "Deploying backend to Azure WebApp..."
+                        echo "========================================"
+                        echo "Deploying Backend to AKS"
+                        echo "========================================"
+
+                        echo "Logging into Azure..."
 
                         az login \
                             --service-principal \
                             -u "$AZURE_CLIENT_ID" \
                             -p "$AZURE_CLIENT_SECRET" \
-                            --tenant "$AZURE_TENANT"
+                            --tenant "$AZURE_TENANT" \
+                            --output none
 
                         az account set \
                             --subscription "$AZURE_SUBSCRIPTION"
 
-                        az webapp config container set \
-                            --resource-group "$RESOURCE_GROUP" \
-                            --name "$BACKEND_APP" \
-                            --docker-custom-image-name "$BACKEND_IMAGE" \
-                            --docker-registry-server-url "https://$AZURE_ACR"
+                        echo "Getting AKS credentials..."
 
-                        az webapp restart \
+                        az aks get-credentials \
                             --resource-group "$RESOURCE_GROUP" \
-                            --name "$BACKEND_APP"
+                            --name "$AKS_NAME" \
+                            --overwrite-existing
 
-                        echo "Backend deployment completed."
+                        echo "Updating backend image..."
+
+                        kubectl -n "$AKS_NAMESPACE" set image \
+                            deployment/bestra-backend \
+                            backend="$BACKEND_IMAGE"
+
+                        echo "Waiting for backend rollout..."
+
+                        kubectl -n "$AKS_NAMESPACE" rollout status \
+                            deployment/bestra-backend \
+                            --timeout=5m
+
+                        echo "Backend successfully deployed to AKS."
+
+                        kubectl -n "$AKS_NAMESPACE" get deployment \
+                            bestra-backend
+
+                        kubectl -n "$AKS_NAMESPACE" get pods \
+                            -l app=bestra-backend
                     '''
                 }
             }
         }
 
-        stage('Deploy Frontend WebApp') {
+
+        stage('Deploy Frontend to AKS') {
+
             steps {
+
                 withCredentials([
+
+                    usernamePassword(
+                        credentialsId: 'azure-service-principal',
+                        usernameVariable: 'AZURE_CLIENT_ID',
+                        passwordVariable: 'AZURE_CLIENT_SECRET'
+                    ),
+
+                    string(
+                        credentialsId: 'azure-tenant-id',
+                        variable: 'AZURE_TENANT'
+                    ),
+
+                    string(
+                        credentialsId: 'azure-subscription-id',
+                        variable: 'AZURE_SUBSCRIPTION'
+                    ),
+
                     usernamePassword(
                         credentialsId: 'dockerhub-creds',
                         usernameVariable: 'DOCKERHUB_USERNAME',
                         passwordVariable: 'DOCKERHUB_PASSWORD'
-                    ),
-                    usernamePassword(
-                        credentialsId: 'azure-service-principal',
-                        usernameVariable: 'AZURE_CLIENT_ID',
-                        passwordVariable: 'AZURE_CLIENT_SECRET'
-                    ),
-                    string(
-                        credentialsId: 'azure-tenant-id',
-                        variable: 'AZURE_TENANT'
-                    ),
-                    string(
-                        credentialsId: 'azure-subscription-id',
-                        variable: 'AZURE_SUBSCRIPTION'
                     )
+
                 ]) {
+
                     sh '''
                         set -e
 
-                        FRONTEND_DOCKERHUB_IMAGE="$DOCKERHUB_USERNAME/bestra-frontend:${BUILD_NUMBER}"
+                        echo "========================================"
+                        echo "Deploying Frontend to AKS"
+                        echo "========================================"
 
-                        echo "Deploying frontend to Azure WebApp..."
+                        echo "Logging into Azure..."
 
                         az login \
                             --service-principal \
                             -u "$AZURE_CLIENT_ID" \
                             -p "$AZURE_CLIENT_SECRET" \
-                            --tenant "$AZURE_TENANT"
+                            --tenant "$AZURE_TENANT" \
+                            --output none
 
                         az account set \
                             --subscription "$AZURE_SUBSCRIPTION"
 
-                        az webapp config container set \
-                            --resource-group "$RESOURCE_GROUP" \
-                            --name "$FRONTEND_APP" \
-                            --docker-custom-image-name "$FRONTEND_DOCKERHUB_IMAGE" \
-                            --docker-registry-server-url "https://index.docker.io/v1/" \
-                            --docker-registry-server-user "$DOCKERHUB_USERNAME" \
-                            --docker-registry-server-password "$DOCKERHUB_PASSWORD"
+                        echo "Getting AKS credentials..."
 
-                        az webapp restart \
+                        az aks get-credentials \
                             --resource-group "$RESOURCE_GROUP" \
-                            --name "$FRONTEND_APP"
+                            --name "$AKS_NAME" \
+                            --overwrite-existing
 
-                        echo "Frontend deployment completed."
+                        FRONTEND_DOCKERHUB_IMAGE="$DOCKERHUB_USERNAME/bestra-frontend:${BUILD_NUMBER}"
+
+                        echo "Frontend image:"
+                        echo "$FRONTEND_DOCKERHUB_IMAGE"
+
+                        echo "Updating frontend image..."
+
+                        kubectl -n "$AKS_NAMESPACE" set image \
+                            deployment/bestra-frontend \
+                            frontend="$FRONTEND_DOCKERHUB_IMAGE"
+
+                        echo "Waiting for frontend rollout..."
+
+                        kubectl -n "$AKS_NAMESPACE" rollout status \
+                            deployment/bestra-frontend \
+                            --timeout=5m
+
+                        echo "Frontend successfully deployed to AKS."
+
+                        kubectl -n "$AKS_NAMESPACE" get deployment \
+                            bestra-frontend
+
+                        kubectl -n "$AKS_NAMESPACE" get pods \
+                            -l app=bestra-frontend
                     '''
                 }
             }
         }
 
-        stage('DAST - OWASP ZAP') {
+
+        stage('Verify AKS Deployment') {
+
             steps {
+
                 sh '''
                     set -e
 
-                    echo "Running OWASP ZAP..."
+                    echo "========================================"
+                    echo "AKS DEPLOYMENT VERIFICATION"
+                    echo "========================================"
+
+                    echo ""
+                    echo "=== AKS Nodes ==="
+
+                    kubectl get nodes
+
+                    echo ""
+                    echo "=== Deployments ==="
+
+                    kubectl get deployments \
+                        -n "$AKS_NAMESPACE"
+
+                    echo ""
+                    echo "=== Pods ==="
+
+                    kubectl get pods \
+                        -n "$AKS_NAMESPACE"
+
+                    echo ""
+                    echo "=== Services ==="
+
+                    kubectl get services \
+                        -n "$AKS_NAMESPACE"
+
+                    echo ""
+                    echo "=== Ingress ==="
+
+                    kubectl get ingress \
+                        -n "$AKS_NAMESPACE"
+
+                    echo ""
+                    echo "=== Backend Health Check ==="
+
+                    kubectl run bestra-health-check \
+                        --image=curlimages/curl \
+                        --namespace="$AKS_NAMESPACE" \
+                        --restart=Never \
+                        --rm \
+                        -i \
+                        -- \
+                        curl -f http://bestra-backend:3000/health
+
+                    echo ""
+                    echo "========================================"
+                    echo "AKS deployment verified successfully."
+                    echo "========================================"
+                '''
+            }
+        }
+
+
+        stage('DAST - OWASP ZAP') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "========================================"
+                    echo "Running OWASP ZAP against AKS HTTPS"
+                    echo "========================================"
 
                     docker run --rm \
-                        -t owasp/zap2docker-stable \
+                        -t \
+                        owasp/zap2docker-stable \
                         zap-baseline.py \
-                        -t "https://$BACKEND_APP.azurewebsites.net/health" \
+                        -t "https://9.160.154.123" \
                         -r zap-report.html \
                         || true
 
@@ -529,8 +722,11 @@ pipeline {
             }
         }
 
+
         stage('End') {
+
             steps {
+
                 echo '========================================'
                 echo 'Bestra DevSecOps Pipeline finished.'
                 echo "Build: ${BUILD_NUMBER}"
@@ -538,6 +734,7 @@ pipeline {
             }
         }
     }
+
 
     post {
 
@@ -547,10 +744,6 @@ pipeline {
 
         failure {
             echo 'PIPELINE FAILED'
-        }
-
-        always {
-            echo 'Pipeline finished.'
         }
     }
 }
