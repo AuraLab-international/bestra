@@ -9,18 +9,21 @@ pipeline {
 
     environment {
 
+        // Azure
         AZURE_ACR = 'bestraacr.azurecr.io'
         RESOURCE_GROUP = 'bestra-rg'
-
         AKS_NAME = 'bestra-aks'
         AKS_NAMESPACE = 'bestra'
 
+        // Kubernetes deployments
         BACKEND_APP = 'bestra-backend'
         FRONTEND_APP = 'bestra-frontend'
 
+        // Images
         BACKEND_IMAGE = "bestraacr.azurecr.io/bestra-backend:${BUILD_NUMBER}"
         FRONTEND_IMAGE = "bestra-frontend:${BUILD_NUMBER}"
 
+        // Jenkins credentials
         DOCKERHUB_CREDENTIALS = 'dockerhub-creds'
         AZURE_CREDENTIALS = 'azure-service-principal'
         SNYK_CREDENTIALS = 'snyk-token'
@@ -30,8 +33,10 @@ pipeline {
 
         stage('Start') {
             steps {
+                echo '========================================'
                 echo 'Starting Bestra DevSecOps Pipeline'
                 echo "Build: ${BUILD_NUMBER}"
+                echo '========================================'
             }
         }
 
@@ -48,7 +53,9 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Preparing environment..."
+                    echo "========================================"
+                    echo "Preparing environment"
+                    echo "========================================"
 
                     node --version
                     npm --version
@@ -68,7 +75,9 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Running GitLeaks..."
+                    echo "========================================"
+                    echo "Running GitLeaks Secret Scan"
+                    echo "========================================"
 
                     docker run --rm \
                         -v "$WORKSPACE:/repo" \
@@ -93,7 +102,9 @@ pipeline {
                         sh '''
                             set -e
 
-                            echo "Running SonarQube SAST..."
+                            echo "========================================"
+                            echo "Running SonarQube SAST"
+                            echo "========================================"
 
                             docker run --rm \
                                 -v "$WORKSPACE:/usr/src" \
@@ -127,7 +138,9 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "Running Snyk Dependency Scan..."
+                        echo "========================================"
+                        echo "Running Snyk Dependency Scan"
+                        echo "========================================"
 
                         cd backend
 
@@ -145,7 +158,7 @@ pipeline {
         }
 
 
-        stage('Parallel Build & Scan') {
+        stage('Parallel Build & Security Scan') {
 
             parallel {
 
@@ -155,7 +168,9 @@ pipeline {
 
                         dir('backend') {
 
-                            echo "=== Backend Validation ==="
+                            echo "========================================"
+                            echo "Backend Validation"
+                            echo "========================================"
 
                             sh '''
                                 set -e
@@ -170,6 +185,10 @@ pipeline {
                             echo "Backend validation: PASS"
 
 
+                            echo "========================================"
+                            echo "Backend Docker Build"
+                            echo "========================================"
+
                             sh '''
                                 set -e
 
@@ -180,12 +199,16 @@ pipeline {
                             echo "Backend Docker Build: PASS"
 
 
+                            echo "========================================"
+                            echo "Backend Trivy Scan"
+                            echo "========================================"
+
                             sh '''
                                 set -e
 
                                 docker run --rm \
                                     -v /var/run/docker.sock:/var/run/docker.sock \
-                                    -v trivy-cache:/root/.cache/trivy \
+                                    -v trivy-cache-backend:/root/.cache/trivy \
                                     aquasec/trivy:latest \
                                     image \
                                     --scanners vuln \
@@ -209,7 +232,9 @@ pipeline {
 
                         dir('bestra') {
 
-                            echo "=== Frontend Build ==="
+                            echo "========================================"
+                            echo "Frontend ReactLynx Build"
+                            echo "========================================"
 
                             sh '''
                                 set -e
@@ -222,6 +247,10 @@ pipeline {
                             echo "ReactLynx Build: PASS"
 
 
+                            echo "========================================"
+                            echo "Frontend Docker Build"
+                            echo "========================================"
+
                             sh '''
                                 set -e
 
@@ -233,12 +262,16 @@ pipeline {
                             echo "Frontend Docker Build: PASS"
 
 
+                            echo "========================================"
+                            echo "Frontend Trivy Scan"
+                            echo "========================================"
+
                             sh '''
                                 set -e
 
                                 docker run --rm \
                                     -v /var/run/docker.sock:/var/run/docker.sock \
-                                    -v trivy-cache:/root/.cache/trivy \
+                                    -v trivy-cache-frontend:/root/.cache/trivy \
                                     aquasec/trivy:latest \
                                     image \
                                     --scanners vuln \
@@ -264,7 +297,9 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Preparing Android bundle..."
+                    echo "========================================"
+                    echo "Preparing Android Bundle"
+                    echo "========================================"
 
                     test -f bestra/dist/main.lynx.bundle
 
@@ -295,7 +330,9 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Building Android APK..."
+                    echo "========================================"
+                    echo "Building Android APK"
+                    echo "========================================"
 
                     docker build \
                         -f Dockerfile.android \
@@ -315,7 +352,6 @@ pipeline {
                     docker rm "$CONTAINER_ID"
 
                     echo "APK successfully extracted:"
-
                     ls -lh android-output/bestra-debug.apk
                 '''
             }
@@ -360,7 +396,9 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "Login to Azure..."
+                        echo "========================================"
+                        echo "Azure Login"
+                        echo "========================================"
 
                         az login \
                             --service-principal \
@@ -372,7 +410,11 @@ pipeline {
                         az account set \
                             --subscription "$AZURE_SUBSCRIPTION"
 
-                        echo "Login to ACR..."
+                        echo "Azure login: PASS"
+
+                        echo "========================================"
+                        echo "ACR Login"
+                        echo "========================================"
 
                         az acr login \
                             --name bestraacr
@@ -391,7 +433,9 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Pushing backend to Azure Container Registry..."
+                    echo "========================================"
+                    echo "Pushing Backend to ACR"
+                    echo "========================================"
 
                     docker push "$BACKEND_IMAGE"
 
@@ -425,6 +469,10 @@ pipeline {
                     sh '''
                         set -e
 
+                        echo "========================================"
+                        echo "DockerHub Login"
+                        echo "========================================"
+
                         echo "$DOCKERHUB_PASSWORD" | docker login \
                             -u "$DOCKERHUB_USERNAME" \
                             --password-stdin
@@ -452,6 +500,10 @@ pipeline {
 
                     sh '''
                         set -e
+
+                        echo "========================================"
+                        echo "Pushing Frontend to DockerHub"
+                        echo "========================================"
 
                         FRONTEND_DOCKERHUB_IMAGE="$DOCKERHUB_USERNAME/bestra-frontend:${BUILD_NUMBER}"
 
@@ -507,8 +559,6 @@ pipeline {
                         echo "Deploying Backend to AKS"
                         echo "========================================"
 
-                        echo "Logging into Azure..."
-
                         az login \
                             --service-principal \
                             -u "$AZURE_CLIENT_ID" \
@@ -518,8 +568,6 @@ pipeline {
 
                         az account set \
                             --subscription "$AZURE_SUBSCRIPTION"
-
-                        echo "Getting AKS credentials..."
 
                         az aks get-credentials \
                             --resource-group "$RESOURCE_GROUP" \
@@ -588,8 +636,6 @@ pipeline {
                         echo "Deploying Frontend to AKS"
                         echo "========================================"
 
-                        echo "Logging into Azure..."
-
                         az login \
                             --service-principal \
                             -u "$AZURE_CLIENT_ID" \
@@ -600,8 +646,6 @@ pipeline {
                         az account set \
                             --subscription "$AZURE_SUBSCRIPTION"
 
-                        echo "Getting AKS credentials..."
-
                         az aks get-credentials \
                             --resource-group "$RESOURCE_GROUP" \
                             --name "$AKS_NAME" \
@@ -611,8 +655,6 @@ pipeline {
 
                         echo "Frontend image:"
                         echo "$FRONTEND_DOCKERHUB_IMAGE"
-
-                        echo "Updating frontend image..."
 
                         kubectl -n "$AKS_NAMESPACE" set image \
                             deployment/bestra-frontend \
@@ -650,30 +692,25 @@ pipeline {
 
                     echo ""
                     echo "=== AKS Nodes ==="
-
                     kubectl get nodes
 
                     echo ""
                     echo "=== Deployments ==="
-
                     kubectl get deployments \
                         -n "$AKS_NAMESPACE"
 
                     echo ""
                     echo "=== Pods ==="
-
                     kubectl get pods \
                         -n "$AKS_NAMESPACE"
 
                     echo ""
                     echo "=== Services ==="
-
                     kubectl get services \
                         -n "$AKS_NAMESPACE"
 
                     echo ""
                     echo "=== Ingress ==="
-
                     kubectl get ingress \
                         -n "$AKS_NAMESPACE"
 
@@ -706,7 +743,7 @@ pipeline {
                     set -e
 
                     echo "========================================"
-                    echo "Running OWASP ZAP against AKS HTTPS"
+                    echo "Running OWASP ZAP"
                     echo "========================================"
 
                     docker run --rm \
@@ -739,11 +776,15 @@ pipeline {
     post {
 
         success {
+            echo '========================================'
             echo 'PIPELINE SUCCESS'
+            echo '========================================'
         }
 
         failure {
+            echo '========================================'
             echo 'PIPELINE FAILED'
+            echo '========================================'
         }
     }
 }
