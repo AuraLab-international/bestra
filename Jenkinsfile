@@ -26,7 +26,7 @@ pipeline {
         // Jenkins credentials
         DOCKERHUB_CREDENTIALS = 'dockerhub-creds'
         AZURE_CREDENTIALS = 'azure-service-principal'
-        SNYK_CREDENTIALS = 'snyk-token'
+        SNYK_CREDENTIALS = 'snyk-token-new'
     }
 
     stages {
