@@ -203,7 +203,8 @@ pipeline {
                             echo "Backend Trivy Scan"
                             echo "========================================"
 
-                            sh '''
+                            retry(3) {
+                                sh '''
                                 set -e
 
                                 docker run --rm \
@@ -211,6 +212,7 @@ pipeline {
                                     -v trivy-cache-backend:/root/.cache/trivy \
                                     aquasec/trivy:latest \
                                     image \
+                                    --db-repository ghcr.io/aquasecurity/trivy-db:2
                                     --scanners vuln \
                                     --severity HIGH,CRITICAL \
                                     --ignore-unfixed \
@@ -219,6 +221,7 @@ pipeline {
                                     --exit-code 1 \
                                     "$BACKEND_IMAGE"
                             '''
+                            }
 
                             echo "Backend Build + Trivy: PASS"
                         }
@@ -266,7 +269,8 @@ pipeline {
                             echo "Frontend Trivy Scan"
                             echo "========================================"
 
-                            sh '''
+                            retry(3) {
+                                sh '''
                                 set -e
 
                                 docker run --rm \
@@ -274,6 +278,7 @@ pipeline {
                                     -v trivy-cache-frontend:/root/.cache/trivy \
                                     aquasec/trivy:latest \
                                     image \
+                                    --db-repository ghcr.io/aquasecurity/trivy-db:2
                                     --scanners vuln \
                                     --severity HIGH,CRITICAL \
                                     --ignore-unfixed \
@@ -281,6 +286,7 @@ pipeline {
                                     --exit-code 1 \
                                     "$FRONTEND_IMAGE"
                             '''
+                            }
 
                             echo "Frontend Build + Trivy: PASS"
                         }
