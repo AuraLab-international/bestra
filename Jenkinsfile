@@ -130,7 +130,7 @@ pipeline {
 
                 withCredentials([
                     string(
-                        credentialsId: 'snyk-token',
+                        credentialsId: 'snyk-token-new',
                         variable: 'SNYK_TOKEN'
                     )
                 ]) {
