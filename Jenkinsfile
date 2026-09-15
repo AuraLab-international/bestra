@@ -212,7 +212,7 @@ pipeline {
                                     -v trivy-cache-backend:/root/.cache/trivy \
                                     aquasec/trivy:latest \
                                     image \
-                                    --db-repository ghcr.io/aquasecurity/trivy-db:2
+                                    --db-repository ghcr.io/aquasecurity/trivy-db:2 \
                                     --scanners vuln \
                                     --severity HIGH,CRITICAL \
                                     --ignore-unfixed \
@@ -278,7 +278,7 @@ pipeline {
                                     -v trivy-cache-frontend:/root/.cache/trivy \
                                     aquasec/trivy:latest \
                                     image \
-                                    --db-repository ghcr.io/aquasecurity/trivy-db:2
+                                    --db-repository ghcr.io/aquasecurity/trivy-db:2 \
                                     --scanners vuln \
                                     --severity HIGH,CRITICAL \
                                     --ignore-unfixed \
