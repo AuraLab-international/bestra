@@ -752,11 +752,14 @@ pipeline {
             echo "Running OWASP ZAP"
             echo "========================================"
 
+            mkdir -p "$WORKSPACE/zap-output"
+            chmod 777 "$WORKSPACE/zap-output"
+
             docker pull ghcr.io/zaproxy/zaproxy:stable
 
             docker run --rm \
                 -t \
-                -v "$WORKSPACE:/zap/wrk:rw" \
+                -v "$WORKSPACE/zap-output:/zap/wrk:rw" \
                 ghcr.io/zaproxy/zaproxy:stable \
                 zap-baseline.py \
                 -t "https://9.160.154.123" \
@@ -768,7 +771,7 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: 'zap-report.html',
+            archiveArtifacts artifacts: 'zap-output/zap-report.html',
                 allowEmptyArchive: true
         }
     }
