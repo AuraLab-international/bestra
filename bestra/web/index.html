@@ -4,13 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bestra</title>
-</head>
-<body>
-    <lynx-view url="/main.web.bundle"></lynx-view>
 
-    <script type="module">
-        import '@lynx-js/web-core';
-        import '@lynx-js/web-elements';
+    <link rel="stylesheet" href="/lynx-web-core/static/css/client.css">
+</head>
+
+<body>
+    <lynx-view
+        style="height:100vh; width:100vw;"
+        url="/main.web.bundle">
+    </lynx-view>
+
+    <script
+        type="module"
+        src="/lynx-web-core/static/js/client.js">
     </script>
 </body>
 </html>
