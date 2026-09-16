@@ -743,27 +743,36 @@ pipeline {
 
         stage('DAST - OWASP ZAP') {
 
-            steps {
+    steps {
 
-                sh '''
-                    set -e
+        sh '''
+            set -e
 
-                    echo "========================================"
-                    echo "Running OWASP ZAP"
-                    echo "========================================"
+            echo "========================================"
+            echo "Running OWASP ZAP"
+            echo "========================================"
 
-                    docker run --rm \
-                        -t \
-                        owasp/zap2docker-stable \
-                        zap-baseline.py \
-                        -t "https://9.160.154.123" \
-                        -r zap-report.html \
-                        || true
+            docker pull ghcr.io/zaproxy/zaproxy:stable
 
-                    echo "OWASP ZAP completed."
-                '''
-            }
+            docker run --rm \
+                -t \
+                -v "$WORKSPACE:/zap/wrk:rw" \
+                ghcr.io/zaproxy/zaproxy:stable \
+                zap-baseline.py \
+                -t "https://9.160.154.123" \
+                -r zap-report.html
+
+            echo "OWASP ZAP completed successfully."
+        '''
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'zap-report.html',
+                allowEmptyArchive: true
         }
+    }
+}
 
 
         stage('End') {
